@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebSolid — parametric part modeler</title>
+  <meta name="description" content="A browser-based parametric part modeler with STL, sketch DXF, orthographic SVG drawing, and BOM exports. Part-library saving requires available server storage.">
+  <link rel="stylesheet" href="/cad.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231b2431'/%3E%3Cpath d='M7 21l9-11 9 11-9 4z' fill='none' stroke='%2364d2ff' stroke-width='2.2' stroke-linejoin='round'/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="glyph">◫</span>
+      <div>
+        <strong>WebSolid</strong>
+        <small>parametric part modeler</small>
+      </div>
+    </div>
+    <nav class="crumbs"><span>Part</span><b id="part-name">Mounting bracket</b></nav>
+    <button id="session-status" class="session-chip" type="button" data-state="unsaved"
+      aria-live="polite"
+      title="Storage status for this page session only. After a reload, WebSolid can't tell whether an earlier export is still on your device.">Unsaved session</button>
+    <div class="toolbar">
+      <button data-view="iso" class="tool active" title="Isometric">Iso</button>
+      <button data-view="front" class="tool" title="Front">Front</button>
+      <button data-view="top" class="tool" title="Top">Top</button>
+      <button data-view="right" class="tool" title="Right">Right</button>
+      <span class="sep"></span>
+      <button id="btn-undo" class="tool" title="Undo (Ctrl+Z)" disabled>↶ Undo</button>
+      <button id="btn-redo" class="tool" title="Redo (Ctrl+Y)" disabled>↷ Redo</button>
+      <button id="btn-new" class="tool" title="Start a new part">New</button>
+      <button id="btn-fit" class="tool" title="Fit view">Fit</button>
+      <button id="btn-stl" class="tool" title="Export the whole part mesh as binary STL; coordinates are mm but STL has no unit metadata">STL</button>
+      <button id="btn-dxf" class="tool" title="Export active sketch profile and hole circles as DXF R12 in mm; not the extruded solid">DXF</button>
+      <button id="btn-drawing" class="tool" title="Export SVG orthographic top, front, and right views with scale, mm bounds, and dimensions; reference preview, not a toleranced drawing">Drawing</button>
+      <button id="btn-bom" class="tool" title="Export CSV: hole list and part summary (mm dimensions, g mass)">BOM</button>
+      <button id="btn-handoff" class="tool" type="button" aria-expanded="false" aria-controls="handoff-panel">Formats &amp; saving</button>
+      <button id="btn-pushpull" class="tool" title="Select a planar face and push/pull it">Push/Pull</button>
+      <button id="btn-measure" class="tool" title="Click two faces to measure min/mean/max distance between them">Measure</button>
+      <button id="btn-savefile" class="tool" title="Download the editable part definition as a .json part file (features, dimensions, material — no mesh)">Save file</button>
+      <button id="btn-openfile" class="tool" title="Open a .json part file and rebuild its editable features">Open file</button>
+      <input id="file-open" type="file" accept=".json,application/json" hidden>
+      <button id="btn-save" class="tool" aria-disabled="true" aria-describedby="parts-library-hint" disabled title="Checking server parts library availability">Save part</button>
+      <button id="btn-save-as" class="tool" aria-disabled="true" aria-describedby="parts-library-hint" disabled title="Checking server parts library availability">Save as…</button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <aside class="panel tree">
+      <h2>FeatureManager</h2>
+      <div class="tree-list" id="tree"></div>
+      <div class="hint">Edit any dimension — the solid rebuilds immediately.</div>
+
+      <div id="macro-panel" class="macro-panel"></div>
+
+      <h2>Parts library</h2>
+      <p id="parts-library-hint" class="hint" role="status" aria-live="polite">Checking server parts library availability…</p>
+      <button id="btn-parts-retry" class="tool wide" type="button" aria-describedby="parts-library-hint">Try again</button>
+      <button id="btn-parts-savefile" class="tool wide" type="button" aria-describedby="parts-library-hint" hidden>Save portable .json file instead</button>
+      <button id="btn-parts-openfile" class="tool wide" type="button" aria-describedby="parts-library-hint" hidden>Open portable .json file</button>
+      <div id="parts-list" class="parts"></div>
+    </aside>
+
+    <main class="viewport-wrap">
+      <aside id="orientation-strip" class="orientation-strip" aria-label="Getting started with WebSolid">
+        <div class="orientation-heading"><strong>Build a part in four steps</strong><button id="orientation-dismiss" class="tool" type="button" aria-label="Dismiss getting started guide">Hide guide</button></div>
+        <ol>
+          <li><a href="#sketch-fields" data-guide-target="starter-shape"><b>1</b> Pick a starter shape</a></li>
+          <li><a href="#sketch-fields" data-guide-target="sketch-dimension"><b>2</b> Change a dimension</a></li>
+          <li><a href="#btn-printability" data-guide-target="btn-printability"><b>3</b> Check printability</a></li>
+          <li><a href="#btn-handoff" data-guide-target="btn-handoff"><b>4</b> Review formats &amp; saving</a></li>
+        </ol>
+      </aside>
+      <button id="orientation-show" class="tool orientation-show" type="button" hidden>Getting started</button>
+      <div id="restore-banner" class="restore-banner" role="status" hidden>
+        <div class="restore-copy">
+          <strong>Restore your last part?</strong>
+          <span>A browser-local snapshot of <b id="restore-name">a part</b> was saved <b id="restore-when">during an earlier session</b>.</span>
+          <span id="restore-replace">Currently open: <b id="restore-active">this part</b>. Restore replaces it.</span>
+          <small>Kept in this browser only — not account-synced and not in the parts library.</small>
+        </div>
+        <div class="restore-actions">
+          <button id="btn-restore-session" class="tool primary" type="button">Restore</button>
+          <button id="btn-discard-session" class="tool" type="button" title="Keep the part that is open now and discard the browser-local recovery snapshot; this cannot be undone">Keep open part &amp; discard snapshot</button>
+        </div>
+      </div>
+      <div id="local-only-note" class="local-only-note" role="status" aria-live="polite" hidden>
+        <div class="local-only-copy">
+          <strong id="local-only-title">This part exists only in this browser</strong>
+          <span id="local-only-detail">A browser-local recovery snapshot is the only copy right now. Clearing site data or switching browsers loses it — save a portable file to keep an editable second copy. WebSolid cannot check whether an exported file is still on your device.</span>
+        </div>
+        <div class="local-only-actions">
+          <button id="btn-local-only-save" class="tool primary" type="button" title="Download this part as an editable .websolid.json part file">Save file</button>
+          <button id="btn-local-only-dismiss" class="tool" type="button" title="Hide this notice; the session chip still shows what is stored">Dismiss</button>
+        </div>
+      </div>
+      <div id="viewport" class="viewport"></div>
+      <div class="viewport-hud">
+        <span id="hud-mode">Shaded with edges</span>
+        <span id="hud-sel">Drag to orbit · wheel to zoom · shift-drag to pan</span>
+      </div>
+      <div class="view-toggles">
+        <label><input type="checkbox" id="tg-edges" checked> Edges</label>
+        <label><input type="checkbox" id="tg-sketch"> Sketch</label>
+        <label><input type="checkbox" id="tg-grid" checked> Grid</label>
+        <label><input type="checkbox" id="tg-wire"> Wireframe</label>
+        <label><input type="checkbox" id="tg-section"> Section</label>
+      </div>
+      <div class="pushpull-panel" id="pushpull-panel" hidden>
+        <b>Face push/pull</b>
+        <span id="pushpull-status">Choose a top or bottom planar face · positive moves outward</span>
+        <span id="measure-status" hidden></span>
+        <label>Distance <input id="pushpull-distance" type="number" value="2" step="0.5"> mm</label>
+        <button id="pushpull-apply" class="tool primary" disabled>Apply</button>
+        <button id="pushpull-cancel" class="tool">Cancel</button>
+        <div class="pp-coach" id="pushpull-coach" hidden>
+          <div class="pp-coach-head">
+            <strong>New to Push/Pull?</strong>
+            <button id="pushpull-coach-close" class="tool pp-coach-close" type="button" title="Dismiss this coach" aria-label="Dismiss the Push/Pull coach">×</button>
+          </div>
+          <ol>
+            <li>Click a <b>top or bottom flat face</b> of the solid — the picked face turns blue.</li>
+            <li>Type a <b>distance</b> in millimetres. Positive grows the part outward, negative cuts it back.</li>
+            <li>Press <b>Apply</b> to add the edit to the feature tree, or <b>Cancel</b> to leave the part unchanged.</li>
+          </ol>
+          <p class="pp-coach-note">Extruded parts with flat top/bottom faces only. Distance 0.01–1000 mm, and the part must stay 0.5–2000 mm thick.</p>
+        </div>
+      </div>
+      <div class="sec-controls" id="sec-controls" hidden>
+        <label>Axis
+          <select id="sec-axis">
+            <option value="x">X</option>
+            <option value="y" selected>Y</option>
+            <option value="z">Z</option>
+          </select>
+        </label>
+        <label>Offset <span id="sec-offset-val">50%</span>
+          <input type="range" id="sec-offset" min="-150" max="150" value="0" step="1">
+        </label>
+      </div>
+    </main>
+
+    <aside class="panel props">
+      <h2>Mass properties</h2>
+      <dl class="readout">
+        <dt>Volume</dt><dd id="rp-vol">—</dd>
+        <dt>Mass</dt><dd id="rp-mass">—</dd>
+        <dt>Surface area</dt><dd id="rp-area">—</dd>
+        <dt>Bounding box</dt><dd id="rp-bbox">—</dd>
+        <dt>Faces (est.)</dt><dd id="rp-faces">—</dd>
+        <dt id="dt-section">Section</dt><dd id="rp-section">—</dd>
+      </dl>
+      <dl class="readout" id="sec-readout" style="display:none">
+        <dt>Section plane</dt><dd id="sec-pos">—</dd>
+        <dt>Kept volume</dt><dd id="sec-kept">—</dd>
+        <dt>Removed volume</dt><dd id="sec-rem">—</dd>
+      </dl>
+
+      <h2>Material</h2>
+      <select id="material"></select>
+      <p class="hint" id="mat-note"></p>
+
+      <h2>Cost estimate</h2>
+      <dl class="readout" id="cost-readout">
+        <dt>Raw material</dt><dd id="cost-raw">—</dd>
+        <dt>Drilling</dt><dd id="cost-drill">—</dd>
+        <dt>Total</dt><dd id="cost-total">—</dd>
+      </dl>
+      <p class="hint" id="cost-note"></p>
+      <div class="cost-basis" id="cost-basis-block">
+        <div class="cost-basis-head">
+          <strong>Computed from</strong>
+          <span id="cost-basis-flag" class="cost-basis-flag" hidden>default rate</span>
+        </div>
+        <dl class="readout cost-basis-readout">
+          <dt>Modeled volume</dt><dd id="cost-basis-volume">—</dd>
+          <dt>Material</dt><dd id="cost-basis-material">—</dd>
+          <dt>Density used</dt><dd id="cost-basis-density">—</dd>
+          <dt>Price used</dt><dd id="cost-basis-price">—</dd>
+          <dt>Holes charged</dt><dd id="cost-basis-holes">—</dd>
+        </dl>
+        <div class="cost-rate">
+          <label for="cost-price">€/kg rate</label>
+          <input id="cost-price" type="number" min="0.01" step="0.5" inputmode="decimal"
+                 title="Override the built-in price per kilogram for this part, in euro per kilogram">
+          <button id="cost-price-reset" class="tool cost-rate-reset" type="button"
+                  title="Drop the override and use the built-in material rate again">Use default</button>
+        </div>
+        <p class="hint" id="cost-rate-note">The built-in rate is a rough starting value, not a supplier quote. Changing it only affects this part's estimate and travels with the saved part file.</p>
+      </div>
+      <details class="estimate-details" id="cost-assumptions">
+        <summary>How this estimate works</summary>
+        <p>Raw material uses modeled volume × selected material density × configured price per kilogram. Drilling is a simple per-hole proxy based on estimated removed volume and hole-seat type.</p>
+        <p id="cost-assumption-inputs" class="hint">Inputs will update with the current part and material.</p>
+        <p class="hint">This estimate excludes labor, waste, machine setup, taxes, and supplier variation. It is advisory, not a quote.</p>
+      </details>
+
+      <h2>Equations</h2>
+      <div id="eq-fields" class="fields"></div>
+      <button id="btn-add-var" class="tool wide">+ Add variable</button>
+      <p class="hint" id="eq-hint"></p>
+
+      <h2>Printability</h2>
+      <div class="print-row">
+        <select id="print-profile">
+          <option value="fdm" selected>FDM printer</option>
+          <option value="resin">Resin printer</option>
+        </select>
+        <button id="btn-printability" class="tool" title="Run mesh printability checks">Check</button>
+        <button id="btn-copy-summary" class="tool" title="Copy a text summary of the current inputs and check results for handoff">Copy summary</button>
+      </div>
+      <div class="fields print-th" id="print-th-fields"></div>
+      <p id="print-stale" class="print-stale" role="status" aria-live="polite" hidden></p>
+      <p class="hint print-guidance-disclaimer">Checks are estimates from the current exported triangle mesh and feature settings, not engineering certification. Results are global; this tool does not identify exact problem locations.</p>
+      <div id="print-chips" class="print-chips"></div>
+      <p class="hint" id="print-note"></p>
+      <details class="estimate-details" id="print-assumptions">
+        <summary>What these checks analyze</summary>
+        <p id="print-assumption-inputs" class="hint">Run Check to see the current mesh and profile assumptions.</p>
+        <p class="hint">These are global mesh estimates for guidance only. They do not locate exact problem regions or certify manufacturability, safety, or suitability for a specific printer.</p>
+      </details>
+
+      <h2>Sketch</h2>
+      <div id="sketch-fields" class="fields"></div>
+
+      <h2>Extrude</h2>
+      <div id="extrude-fields" class="fields"></div>
+
+      <h2>Holes</h2>
+      <div class="hole-grid">
+        <label class="field"><span>Min wall</span>
+          <input id="min-wall" type="number" value="2" step="0.5" min="0" style="width:70px"> mm
+        </label>
+      </div>
+      <div id="hole-fields" class="fields"></div>
+      <p class="hint" id="clearance-summary"></p>
+      <p class="hint" id="spacing-summary"></p>
+      <button id="btn-add-hole" class="tool wide">+ Add hole</button>
+    </aside>
+  </div>
+
+  <section id="handoff-panel" class="handoff-panel" hidden aria-labelledby="handoff-title">
+    <div class="handoff-head">
+      <h2 id="handoff-title">Formats &amp; saving</h2>
+      <button id="btn-handoff-close" class="tool" type="button" aria-label="Close formats and saving panel">Close</button>
+    </div>
+    <p id="handoff-summary" class="handoff-summary" aria-live="polite">Choose an export to review its handoff details before downloading.</p>
+    <p id="artifact-receipt" class="artifact-receipt" aria-live="polite" aria-atomic="true"></p>
+    <ol id="handoff-checklist" class="handoff-checklist" aria-label="Export checklist for this format"></ol>
+    <section id="handoff-preflight" class="handoff-preflight" aria-labelledby="preflight-title">
+      <h3 id="preflight-title">Export preflight</h3>
+      <p class="preflight-note">Blocking checks highlight geometry to review; export is still available below.</p>
+      <h4>Blocking geometry checks</h4>
+      <ul id="preflight-blocking" aria-label="Blocking geometry checks"></ul>
+      <h4>Advisory checks</h4>
+      <ul id="preflight-advisory" aria-label="Advisory checks"></ul>
+    </section>
+    <button id="btn-handoff-export" class="tool primary" type="button" hidden>Continue to export</button>
+    <ul>
+      <li><strong>STL · binary mesh:</strong> whole part geometry. Coordinates are in mm here, but STL stores no unit metadata; set units to millimetres when importing.</li>
+      <li><strong>DXF R12 · sketch:</strong> active sketch outline and hole/seat circles only, in mm; it does not include the extruded 3D solid.</li>
+      <li><strong>SVG · drawing:</strong> orthographic top, front, and right views include the sheet scale, overall mm bounds, and each view’s mm dimensions. It is a reference preview, not a toleranced manufacturing drawing.</li>
+      <li><strong>CSV · BOM:</strong> hole list plus part name, material, volume (mm³), mass (g), and bounding box (mm).</li>
+      <li><strong>JSON · part file:</strong> the editable definition only — sketch, extrusion, holes, material, equations, feature history. It contains no mesh and no account state, so it can be handed to another person or opened in a different browser.</li>
+    </ul>
+    <p class="handoff-save"><strong>Saving:</strong> Save part and the parts library use server-side storage. They are not browser-local saves. If the library is unavailable, use <strong>Save file</strong>: a .json part file keeps the editable parametric definition and, unlike STL/DXF/SVG/CSV, can be opened again in WebSolid. The “Part file saved” status is tracked only in this page session; after a reload, WebSolid cannot check whether an earlier export still exists on your device.</p>
+  </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="/libs/three.min.js"></script>
+  <script src="/printability.js"></script>
+<script src="/checksummary.js"></script>
+  <script src="/equations.js"></script>
+  <script src="/svgimport.js"></script>
+  <script src="/librarystatus.js"></script>
+  <script src="/cad.js"></script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+.env
+node_modules/
+libs/unused/
+*.log
+storage/*.key
+dump.sql

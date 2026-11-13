@@ -1,0 +1,4 @@
+web:
+  dockerfile: Dockerfile
+  port: 8080
+  health: /healthz

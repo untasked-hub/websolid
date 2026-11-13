@@ -1,0 +1,15 @@
+{
+    "name": "websolid",
+    "version": "0.1.0",
+    "private": true,
+    "description": "WebSolid — a browser-based parametric CAD modeler (sketch, extrude, holes, feature tree).",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js"
+    },
+    "dependencies": {
+        "express": "^4.19.2",
+        "pg": "^8.12.0",
+        "three": "0.149.0"
+    }
+}
