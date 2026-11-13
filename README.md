@@ -4,7 +4,7 @@ A parametric part modeler that runs in the browser. Sketch a profile, add holes,
 extrude to a solid, read real mass properties, and export STL / DXF / an SVG
 drawing sheet. Parts are stored server-side in Postgres.
 
-Live: https://untasked-production-01m58vhze9ez.fly.dev
+Live: https://websolid.untasked.run
 
 ## What it does
 
@@ -33,7 +33,6 @@ Live: https://untasked-production-01m58vhze9ez.fly.dev
   - `svgimport.js` — SVG path and document import (pure functions, unit tested)
   - `equations.js` — expression store and dependency resolution
   - `printability.js` — mesh checks for FDM and resin printers
-- `tools/svgimport-test.js` — unit tests for SVG import (`node apps/solidcad/tools/svgimport-test.js`)
 - `Dockerfile` — node:20-alpine, port 8080.
 - `untasked.yaml` — `web.dockerfile`, `web.port` 8080, `web.health` `/healthz`.
 
