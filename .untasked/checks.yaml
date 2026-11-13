@@ -1,3 +1,10 @@
-name: test
+name: syntax
 commands:
-  - echo untasked-check
+  - node --check server.js
+  - node --check public/cad.js
+  - node --check public/app.js
+  - node --check public/equations.js
+  - node --check public/printability.js
+  - node --check public/svgimport.js
+  - node --check public/librarystatus.js
+  - node --check public/checksummary.js
