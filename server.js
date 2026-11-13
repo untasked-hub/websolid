@@ -184,6 +184,17 @@ app.get('/healthz', async (req, res) => {
   }
 });
 
+// Every data endpoint waits for the schema once, then retries on a failed boot.
+app.use(['/api/state', '/api/projects', '/api/tasks', '/api/sessions'], async (req, res, next) => {
+  const p = globalThis.__solidSchema || boot();
+  try {
+    await p;
+  } catch (err) {
+    return res.status(503).json({ error: 'The workspace store is unavailable right now. Try again in a few seconds.' });
+  }
+  next();
+});
+
 app.get('/api/state', wrap(async (req, res) => {
   const projects = await pool.query('SELECT * FROM projects ORDER BY position, id');
   const tasks = await pool.query('SELECT * FROM tasks ORDER BY position, id');
@@ -341,6 +352,9 @@ function sanitizePayload(raw) {
   const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
   const types = ['rect', 'circle', 'hex', 'L', 'slot', 'custom'];
   const coord = (v) => Math.max(-2000, Math.min(2000, num(v, 0)));
+  // Read the sketch before any helper below touches it (declaration order matters
+  // here: referencing `sk` earlier threw a TDZ ReferenceError on every POST/PUT).
+  const sk = raw.sketch && typeof raw.sketch === 'object' ? raw.sketch : {};
   const entitiesIn = Array.isArray(sk.entities) ? sk.entities.slice(0, 128) : [];
   const entitiesOut = [];
   for (const e of entitiesIn) {
@@ -379,7 +393,6 @@ function sanitizePayload(raw) {
     }
   }
   const materials = ['steel', 'aluminium', 'brass', 'abs', 'nylon'];
-  const sk = raw.sketch && typeof raw.sketch === 'object' ? raw.sketch : {};
   const ex = raw.extrude && typeof raw.extrude === 'object' ? raw.extrude : {};
   const holesIn = Array.isArray(raw.holes) ? raw.holes.slice(0, 24) : [];
   // Global equations: resolve expressions BEFORE clamping so a variable-driven
@@ -494,12 +507,18 @@ function clamp(path, value, fallback) {
 
 // Parts endpoints wait for the schema when the process just started.
 app.use('/api/parts', async (req, res, next) => {
-  const p = globalThis.__solidSchema;
-  if (!p) return next();
+  // (see the shared guard above; this one carries parts-specific wording)
+  let p = globalThis.__solidSchema;
+  if (!p) {
+    // Either the first boot is still queued or an earlier attempt failed: start
+    // (or retry) the schema bootstrap on demand so the library recovers without
+    // a machine restart.
+    p = boot();
+  }
   try {
     await p;
   } catch (err) {
-    return res.status(503).json({ error: 'The database is still starting. Try again in a few seconds.' });
+    return res.status(503).json({ error: 'The parts library is unavailable right now. Use Save file to keep this part as a portable .json file.' });
   }
   next();
 });
@@ -603,10 +622,15 @@ app.use((err, req, res, next) => {
 function boot() {
   const schemaReady = migrate().catch((err) => {
     console.error('startup migration failed', err);
+    // Do not cache a rejected promise: a transient DB outage would otherwise
+    // pin every parts request to 503 until the machine restarts. Clear the slot
+    // so the next request retries migrate() instead of replaying the failure.
+    if (globalThis.__solidSchema === schemaReady) globalThis.__solidSchema = null;
     throw err;
   });
   globalThis.__solidSchema = schemaReady;
   schemaReady.catch(() => {});
+  return schemaReady;
 }
 
 const server = app.listen(PORT, '0.0.0.0', () => {
