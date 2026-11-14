@@ -2,7 +2,9 @@
 
 A parametric part modeler that runs in the browser. Sketch a profile, add holes,
 extrude to a solid, read real mass properties, and export STL / DXF / an SVG
-drawing sheet. Parts are stored server-side in Postgres.
+drawing sheet. Export and open portable `.json` part files to keep an editable
+second copy; the optional parts library stores parts server-side in Postgres when
+a database is configured.
 
 Live: https://websolid.untasked.run
 
@@ -25,8 +27,9 @@ Live: https://websolid.untasked.run
 ## Stack
 
 - `server.js` — Express + `pg`. Serves the static SPA and a JSON API:
-  - `GET /healthz` — DB ping
+  - `GET /healthz` — process health (`ok`; includes a DB ping when a database is configured)
   - `GET /api/parts`, `GET /api/parts/:id`, `POST /api/parts` — parts library
+    (requires a database; returns 503 with a clear message when none is configured)
   - `GET /api/state` — projects, tasks, sessions, stats (workspace planner)
 - `public/` — dependency-free SPA plus modules:
   - `cad.html` / `cad.css` / `cad.js` — shell, styles, modeler and 3D viewport
@@ -39,6 +42,11 @@ Live: https://websolid.untasked.run
 The schema is created at boot with `MIGRATION_DATABASE_URL` (owner role) and
 granted to the runtime role, because the hosted runtime user has no `CREATE`
 on the schema.
+
+Without `DATABASE_URL` the modeler still runs fully in the browser: every
+modeling, readout and export feature works, and parts are saved as portable
+`.json` files. Only the server-side parts library and `/api/state` need
+a database.
 
 ## Run locally
 
