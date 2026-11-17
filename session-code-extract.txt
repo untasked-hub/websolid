@@ -1,0 +1,506 @@
+===== 4280-4605 =====
+4280:               pitch2: Math.min(500, Math.max(1, num(holes[h].pattern.pitch2, 20))),
+4281:               skip: cleanSkipList(holes[h].pattern.skip) || []
+4282:             }
+4283:           : holes[h].pattern.mode === 'polar'
+4284:           ? {
+4285:               mode: 'polar',
+4286:               count: Math.min(24, Math.max(1, Math.round(num(holes[h].pattern.count, 6)))),
+4287:               span: Math.min(360, Math.max(10, num(holes[h].pattern.span, 360))),
+4288:               radius: Math.max(0, num(holes[h].pattern.radius, 0)),
+4289:               cx: num(holes[h].pattern.cx, 0),
+4290:               cy: num(holes[h].pattern.cy, 0),
+4291:               skip: cleanSkipList(holes[h].pattern.skip) || []
+4292:             }
+4293:           : {
+4294:               mode: 'linear',
+4295:               rows: Math.min(10, Math.max(1, Math.round(num(holes[h].pattern.rows, 1)))),
+4296:               cols: Math.min(10, Math.max(1, Math.round(num(holes[h].pattern.cols, 1)))),
+4297:               dx: num(holes[h].pattern.dx, 20),
+4298:               dy: num(holes[h].pattern.dy, 20),
+4299:               centered: !!holes[h].pattern.centered
+4300:             };
+4301:       }
+4302:       out.holes.push(ho);
+4303:     }
+4304:     return out;
+4305:   }
+4306: 
+4307:   function umax(v) {
+4308:     return Math.max(0.5, v);
+4309:   }
+4310: 
+4311:   function loadPartIntoEditor(p, id) {
+4312:     part = sanitizePart(p);
+4313:     partId = id || null;
+4314:     renderAll();
+4315:   }
+4316: 
+4317:   /* ------------------------------------------------- session persistence
+4318:      The server parts library is optional and may be unavailable, so the
+4319:      editor keeps a browser-local snapshot of the part definition on every
+4320:      rebuild. The chip in the title bar states which of the two exists; the
+4321:      copy never implies an account sync. The snapshot holds the parametric
+4322:      definition (features, dimensions, material, equations), not the mesh. */
+4323: 
+4324:   var SESSION_KEY = 'websolid.sessionSnapshot.v1';
+4325:   var SESSION_MAX_BYTES = 400000;
+4326:   var sessionArmed = false;          /* false until boot decided about restore */
+4327:   var sessionTimer = null;
+4328:   var sessionSavedAt = null;         /* Date of the last successful local write */
+4329:   var sessionBlocked = false;        /* snapshot too large or storage refused */
+4330:   var librarySaved = false;          /* true only right after Save part succeeded */
+4331:   var librarySavedKey = null;        /* part JSON that matches the library copy */
+4332:   var pendingRestore = null;
+4333: 
+4334:   function partKey(p) {
+4335:     try { return JSON.stringify(sanitizePart(p)); } catch (e) { return null; }
+4336:   }
+4337: 
+4338:   function readSession() {
+4339:     try {
+4340:       var raw = window.localStorage.getItem(SESSION_KEY);
+4341:       if (!raw) return null;
+4342:       var snap = JSON.parse(raw);
+4343:       if (!snap || snap.v !== 1 || !snap.part || typeof snap.part !== 'object') return null;
+4344:       return snap;
+4345:     } catch (e) { return null; }
+4346:   }
+4347: 
+4348:   function formatClock(iso) {
+4349:     var d = iso ? new Date(iso) : null;
+4350:     if (!d || isNaN(d.getTime())) return '';
+4351:     return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+4352:   }
+4353: 
+4354:   function setSessionStatus(text, state, title) {
+4355:     var chip = document.getElementById('session-status');
+4356:     if (!chip) return;
+4357:     chip.textContent = text;
+4358:     chip.setAttribute('data-state', state);
+4359:     if (title) chip.setAttribute('title', title);
+4360:   }
+4361: 
+4362:   function updateSessionStatus() {
+4363:     if (pendingRestore) {
+4364:       setSessionStatus('Local snapshot found — choose Restore or Discard', 'restore',
+4365:         'A part definition from an earlier session is stored in this browser.');
+4366:       return;
+4367:     }
+4368:     var clock = sessionSavedAt ? formatClock(sessionSavedAt) : '';
+4369:     if (librarySaved) {
+4370:       setSessionStatus('Saved to library' + (clock ? ' · kept locally ' + clock : ''), 'saved',
+4371:         'The part is in the server-side parts library and a browser-local snapshot exists.');
+4372:       return;
+4373:     }
+4374:     if (sessionBlocked) {
+4375:       setSessionStatus('Unsaved session — too large to keep locally', 'warning',
+4376:         'This part is too large for the browser-local snapshot. Use Save part or export a file.');
+4377:       return;
+4378:     }
+4379:     if (clock) {
+4380:       setSessionStatus('Unsaved session · kept in this browser ' + clock, 'local',
+4381:         'Browser-local snapshot only: it is per-browser, not account-synced, and does not replace Save part.');
+4382:       return;
+4383:     }
+4384:     setSessionStatus('Unsaved session', 'unsaved',
+4385:       'Nothing is stored yet: this browser snapshot and the server parts library are both empty for this part.');
+4386:   }
+4387: 
+4388:   function writeSessionSnapshot(now) {
+4389:     if (!sessionArmed || pendingRestore) return;
+4390:     var key = partKey(part);
+4391:     if (key === null) return;
+4392:     if (key.length > SESSION_MAX_BYTES) {
+4393:       if (!sessionBlocked) { sessionBlocked = true; updateSessionStatus(); }
+4394:       return;
+4395:     }
+4396:     var stamp = (now || new Date()).toISOString();
+4397:     try {
+4398:       window.localStorage.setItem(SESSION_KEY, JSON.stringify({ v: 1, savedAt: stamp, part: JSON.parse(key) }));
+4399:       sessionSavedAt = stamp;
+4400:       sessionBlocked = false;
+4401:     } catch (e) {
+4402:       if (!sessionBlocked) { sessionBlocked = true; }
+4403:       updateSessionStatus();
+4404:       return;
+4405:     }
+4406:     if (librarySaved && librarySavedKey !== key) librarySaved = false;
+4407:     updateSessionStatus();
+4408:   }
+4409: 
+4410:   function scheduleSessionSnapshot() {
+4411:     if (!sessionArmed || pendingRestore) return;
+4412:     if (sessionTimer) clearTimeout(sessionTimer);
+4413:     sessionTimer = setTimeout(function () { sessionTimer = null; writeSessionSnapshot(); }, 700);
+4414:   }
+4415: 
+4416:   function hideRestoreBanner() {
+4417:     var banner = document.getElementById('restore-banner');
+4418:     if (banner) banner.hidden = true;
+4419:   }
+4420: 
+4421:   function discardSessionSnapshot(reason) {
+4422:     pendingRestore = null;
+4423:     try { window.localStorage.removeItem(SESSION_KEY); } catch (e) {}
+4424:     sessionSavedAt = null;
+4425:     hideRestoreBanner();
+4426:     sessionArmed = true;
+4427:     if (reason) toast(reason);
+4428:     updateSessionStatus();
+4429:   }
+4430: 
+4431:   function restoreSessionSnapshot() {
+4432:     var snap = pendingRestore;
+4433:     pendingRestore = null;
+4434:     hideRestoreBanner();
+4435:     if (!snap) { sessionArmed = true; updateSessionStatus(); return; }
+4436:     sessionArmed = true;
+4437:     sessionSavedAt = snap.savedAt || null;
+4438:     partId = null;
+4439:     loadPartIntoEditor(snap.part, null);
+4440:     librarySaved = false;
+4441:     toast('Restored the browser-local snapshot from ' + (formatClock(snap.savedAt) || 'earlier') +
+4442:       ' — it is not in the parts library yet');
+4443:     writeSessionSnapshot();
+4444:   }
+4445: 
+4446:   function initSessionSnapshot() {
+4447:     var snap = readSession();
+4448:     if (!snap) {
+4449:       sessionArmed = true;
+4450:       updateSessionStatus();
+4451:       return;
+4452:     }
+4453:     pendingRestore = snap;
+4454:     var banner = document.getElementById('restore-banner');
+4455:     if (banner) {
+4456:       var name = snap.part && snap.part.name ? String(snap.part.name).slice(0, 60) : 'a part';
+4457:       document.getElementById('restore-name').textContent = name;
+4458:       document.getElementById('restore-when').textContent = formatClock(snap.savedAt) || 'an earlier session';
+4459:       banner.hidden = false;
+4460:     }
+4461:     updateSessionStatus();
+4462:   }
+4463: 
+4464:   function noteLibrarySave() {
+4465:     librarySaved = true;
+4466:     librarySavedKey = partKey(part);
+4467:     updateSessionStatus();
+4468:   }
+4469: 
+4470:   function refreshPartsList() {
+4471:     var box = document.getElementById('parts-list');
+4472:     fetch('/api/parts')
+4473:       .then(function (r) {
+4474:         if (!r.ok) throw new Error('parts library unavailable');
+4475:         return r.json();
+4476:       })
+4477:       .then(function (data) {
+4478:         box.innerHTML = '';
+4479:         var parts = (data && data.parts) || [];
+4480:         if (!parts.length) {
+4481:           box.innerHTML = '<p class="hint">No parts are saved in the server library yet.</p>';
+4482:           return;
+4483:         }
+4484:         parts.forEach(function (row) {
+4485:           var item = document.createElement('div');
+4486:           item.className = 'part-row' + (String(row.id) === String(partId) ? ' active' : '');
+4487:           var btn = document.createElement('button');
+4488:           btn.className = 'part-load';
+4489:           var vol = row.volume_mm3 ? (Number(row.volume_mm3) / 1000).toFixed(1) + ' cm3' : 'unsaved';
+4490:           btn.innerHTML = '<b>' + escapeHtml(row.name) + '</b><em>' + vol + '</em>';
+4491:           btn.addEventListener('click', function () {
+4492:             var pk = row.payload || {};
+4493:             loadPartIntoEditor(pk, row.id);
+4494:             toast('Loaded ' + row.name);
+4495:           });
+4496:           var del = document.createElement('button');
+4497:           del.className = 'part-del';
+4498:           del.textContent = 'x';
+4499:           del.title = 'Delete part';
+4500:           del.addEventListener('click', function (ev) {
+4501:             ev.stopPropagation();
+4502:             fetch('/api/parts/' + row.id, { method: 'DELETE' }).then(function () {
+4503:               if (String(row.id) === String(partId)) partId = null;
+4504:               refreshPartsList();
+4505:               toast('Deleted ' + row.name);
+4506:             });
+4507:           });
+4508:           item.appendChild(btn);
+4509:           item.appendChild(del);
+4510:           box.appendChild(item);
+4511:         });
+4512:       })
+4513:       .catch(function () {
+4514:         box.innerHTML = '<p class="hint">Server parts library unavailable. Save part is not available right now; export a file to keep your work.</p>';
+4515:       });
+4516:   }
+4517: 
+4518:   function escapeHtml(s) {
+4519:     return String(s).replace(/[&<>"']/g, function (ch) {
+4520:       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+4521:     });
+4522:   }
+4523: 
+4524:   function savePart(forceNew) {
+4525:     var name = part.name && part.name.trim();
+4526:     if (!name) { toast('Give the part a name first', true); return; }
+4527:     var body = JSON.stringify({
+4528:       name: name,
+4529:       payload: part,
+4530:       volume_mm3: metrics ? metrics.volumeMm3 : null,
+4531:       mass_g: metrics ? metrics.massG : null
+4532:     });
+4533:     var update = partId && !forceNew;
+4534:     var url = update ? '/api/parts/' + partId : '/api/parts';
+4535:     var method = update ? 'PUT' : 'POST';
+4536:     fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: body })
+4537:       .then(function (r) {
+4538:         if (!r.ok) throw new Error('save failed');
+4539:         return r.json();
+4540:       })
+4541:       .then(function (row) {
+4542:         partId = row.id;
+4543:         noteLibrarySave();
+4544:         toast((update ? 'Updated "' : 'Saved "') + row.name + '" in the server parts library');
+4545:         refreshPartsList();
+4546:       })
+4547:       .catch(function () { toast('Server parts library unavailable. Export a file to keep your work.', true); });
+4548:   }
+4549: 
+4550:   /* Portable part file: the editable parametric definition as JSON.
+4551:      This is deliberately not a mesh or an account object: it holds only what
+4552:      sanitizePart() produces, so it re-opens into the same feature tree and
+4553:      cannot carry geometry that the modeler would not build itself. */
+4554:   var PART_FILE_VERSION = 1;
+4555:   var PART_FILE_MAX_BYTES = 2000000;
+4556: 
+4557:   function partFilePayload() {
+4558:     return {
+4559:       format: 'websolid-part',
+4560:       version: PART_FILE_VERSION,
+4561:       savedAt: new Date().toISOString(),
+4562:       app: 'WebSolid parametric part modeler',
+4563:       note: 'Editable part definition only: sketch, features, holes, material, equations. No mesh, no account state.',
+4564:       part: sanitizePart(part)
+4565:     };
+4566:   }
+4567: 
+4568:   function exportPartFile() {
+4569:     var text = JSON.stringify(partFilePayload(), null, 2);
+4570:     var blob = new Blob([text], { type: 'application/json' });
+4571:     var url = URL.createObjectURL(blob);
+4572:     var link = document.createElement('a');
+4573:     link.href = url;
+4574:     link.download = (part.name || 'part').replace(/[^a-z0-9\-_]+/gi, '-').toLowerCase() + '.websolid.json';
+4575:     document.body.appendChild(link);
+4576:     link.click();
+4577:     document.body.removeChild(link);
+4578:     setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+4579:     toast('Part file saved — editable definition only, no mesh');
+4580:   }
+4581: 
+4582:   function importPartFile(text) {
+4583:     var data;
+4584:     try { data = JSON.parse(text); } catch (e) { toast('That file is not valid JSON', true); return false; }
+4585:     if (!data || typeof data !== 'object' || data.format !== 'websolid-part') {
+4586:       toast('That JSON file is not a WebSolid part file', true);
+4587:       return false;
+4588:     }
+4589:     if (!data.part || typeof data.part !== 'object') {
+4590:       toast('The part file has no part definition', true);
+4591:       return false;
+4592:     }
+4593:     part = sanitizePart(data.part);
+4594:     partId = null;
+4595:     librarySaved = false;
+4596:     librarySavedKey = null;
+4597:     renderAll();
+4598:     fitView();
+4599:     writeSessionSnapshot();
+4600:     toast('Opened ' + (part.name || 'part') + ' — not in the parts library yet');
+4601:     return true;
+4602:   }
+4603: 
+4604:   function openPartFile() {
+4605:     var input = document.getElementById('file-open');
+===== 4720-4815 =====
+4720:     document.getElementById('btn-measure').addEventListener('click', toggleMeasure);
+4721:     document.getElementById('pushpull-distance').addEventListener('input', updatePushPullPreview);
+4722:     document.getElementById('pushpull-apply').addEventListener('click', commitPushPull);
+4723:     document.getElementById('pushpull-cancel').addEventListener('click', function () { closePushPull(); });
+4724:     var coachClose = document.getElementById('pushpull-coach-close');
+4725:     if (coachClose) coachClose.addEventListener('click', dismissPushPullCoach);
+4726:     document.getElementById('btn-stl').addEventListener('click', function () { openExportHandoff('stl', exportStl); });
+4727:     var handoffPanel = document.getElementById('handoff-panel');
+4728:     var handoffToggle = document.getElementById('btn-handoff');
+4729:     var handoffClose = document.getElementById('btn-handoff-close');
+4730:     function setHandoffOpen(open) {
+4731:       var confirmExport = document.getElementById('btn-handoff-export');
+4732:       confirmExport.hidden = true;
+4733:       confirmExport.onclick = null;
+4734:       document.getElementById('handoff-checklist').replaceChildren();
+4735:       document.getElementById('handoff-summary').textContent = 'Choose an export to review its handoff details before downloading.';
+4736:       handoffPanel.hidden = !open;
+4737:       handoffToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+4738:       if (open) handoffClose.focus(); else handoffToggle.focus();
+4739:     }
+4740:     handoffToggle.addEventListener('click', function () { setHandoffOpen(handoffPanel.hidden); });
+4741:     handoffClose.addEventListener('click', function () { setHandoffOpen(false); });
+4742:     handoffPanel.addEventListener('keydown', function (ev) {
+4743:       if (ev.key === 'Escape') { ev.preventDefault(); setHandoffOpen(false); }
+4744:     });
+4745:     document.getElementById('btn-dxf').addEventListener('click', function () { openExportHandoff('dxf', exportDxf); });
+4746:     document.getElementById('btn-drawing').addEventListener('click', function () { openExportHandoff('svg', exportDrawing); });
+4747:     document.getElementById('btn-bom').addEventListener('click', function () { openExportHandoff('csv', exportBom); });
+4748:     document.getElementById('btn-printability').addEventListener('click', runPrintability);
+4749:     var printProfile = document.getElementById('print-profile');
+4750:     if (printProfile) {
+4751:       if (part.printability && part.printability.profile) printProfile.value = part.printability.profile;
+4752:       printProfile.addEventListener('change', function (e) {
+4753:         part.printability = part.printability || {};
+4754:         part.printability.profile = e.target.value;
+4755:         runPrintability();
+4756:       });
+4757:     }
+4758:     var btnSaveFile = document.getElementById('btn-savefile');
+4759:     if (btnSaveFile) btnSaveFile.addEventListener('click', function () { exportPartFile(); });
+4760:     var btnOpenFile = document.getElementById('btn-openfile');
+4761:     var fileOpen = document.getElementById('file-open');
+4762:     if (btnOpenFile) btnOpenFile.addEventListener('click', openPartFile);
+4763:     if (fileOpen) fileOpen.addEventListener('change', function () { readPartFile(fileOpen); });
+4764:     document.getElementById('btn-save').addEventListener('click', function () { savePart(false); });
+4765:     document.getElementById('btn-save-as').addEventListener('click', function () {
+4766:       var next = window.prompt('Save as a new part named', (part.name || 'Part') + ' copy');
+4767:       if (!next || !next.trim()) return;
+4768:       part.name = next.trim().slice(0, 160);
+4769:       rebuild();
+4770:       savePart(true);
+4771:     });
+4772:     document.getElementById('btn-new').addEventListener('click', newPart);
+4773:     var btnRestore = document.getElementById('btn-restore-session');
+4774:     if (btnRestore) btnRestore.addEventListener('click', restoreSessionSnapshot);
+4775:     var btnDiscard = document.getElementById('btn-discard-session');
+4776:     if (btnDiscard) btnDiscard.addEventListener('click', function () {
+4777:       discardSessionSnapshot('Discarded the browser-local snapshot');
+4778:     });
+4779:     var btnUndo = document.getElementById('btn-undo');
+4780:     var btnRedo = document.getElementById('btn-redo');
+4781:     if (btnUndo) btnUndo.addEventListener('click', undo);
+4782:     if (btnRedo) btnRedo.addEventListener('click', redo);
+4783: 
+4784:     var minWallInput = document.getElementById('min-wall');
+4785:     if (minWallInput) {
+4786:       minWallInput.value = num(part.minWall, 2);
+4787:       minWallInput.addEventListener('change', function (e) {
+4788:         var v = parseFloat(e.target.value);
+4789:         part.minWall = isFinite(v) && v >= 0 ? v : 2;
+4790:         renderAll();
+4791:       });
+4792:     }
+4793: 
+4794:     document.getElementById('btn-add-hole').addEventListener('click', function () {
+4795:       part.holes.push({ x: 0, y: 0, d: 6 });
+4796:       recordMacro('Add hole - Cut' + part.holes.length + ' Dia 6 mm');
+4797:       renderAll();
+4798:       toast('Hole added - drag the centre with X / Y');
+4799:     });
+4800: 
+4801:     document.getElementById('tg-edges').addEventListener('change', function (e) {
+4802:       view.edges = e.target.checked;
+4803:       if (edgeLines) edgeLines.visible = view.edges && !view.wire;
+4804:       needRender = true;
+4805:     });
+4806:     document.getElementById('tg-grid').addEventListener('change', function (e) {
+4807:       gridHelper.visible = e.target.checked;
+4808:       axes.visible = e.target.checked;
+4809:       needRender = true;
+4810:     });
+4811:     document.getElementById('tg-sketch').addEventListener('change', function (e) {
+4812:       view.sketch = e.target.checked;
+4813:       if (metrics) rebuild();
+4814:     });
+4815:     document.getElementById('tg-wire').addEventListener('change', function (e) {
+===== 5100-5180 =====
+5100:     var el = document.querySelector('input[data-eqpath="' + path + '"]');
+5101:     if (!el || el.disabled) return false;
+5102:     el.focus();
+5103:     if (el.select) el.select();
+5104:     toast('Dimension: ' + path + ' — type a value, press Enter');
+5105:     return true;
+5106:   }
+5107:   document.addEventListener('keydown', function (e) {
+5108:     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+5109:       var kk = String(e.key || '').toLowerCase();
+5110:       if (kk === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+5111:       if (kk === 'y') { e.preventDefault(); redo(); return; }
+5112:     }
+5113:     if (e.key === 'Tab') return;
+5114:     var t = e.target;
+5115:     var typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+5116:     if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+5117:     var k = String(e.key || '').toLowerCase();
+5118:     if (k === 'w') { if (focusDimension('sketch.width')) e.preventDefault(); }
+5119:     else if (k === 'h') { if (focusDimension('sketch.height')) e.preventDefault(); }
+5120:     else if (k === 'f') { if (focusDimension('sketch.round')) e.preventDefault(); }
+5121:     else if (k === 'e') { if (focusDimension('extrude.depth')) e.preventDefault(); }
+5122:     else if (k === 'd') {
+5123:       var n = 0;
+5124:       while (n < 24) {
+5125:         var hel = document.querySelector('input[data-eqpath="holes.' + n + '.d"]');
+5126:         if (hel && !hel.disabled) { if (focusDimension('holes.' + n + '.d')) e.preventDefault(); break; }
+5127:         n++;
+5128:       }
+5129:     }
+5130:   });
+5131: 
+5132:   wireControls();
+5133:   renderAll();
+5134:   resize();
+5135:   applyCamera();
+5136:   fitView();
+5137:   refreshPartsList();
+5138:   initSessionSnapshot();
+5139:   loop();
+5140: 
+5141:   window.addEventListener('resize', function () {
+5142:     resize();
+5143:     needRender = true;
+5144:   });
+5145: 
+5146:   // expose a tiny handle so a smoke test can read state
+5147:   window.__solid = {
+5148:     mode: renderer ? 'webgl' : 'canvas2d',
+5149:     redraw: function () { needRender = true; },
+5150:     getPart: function () { return JSON.parse(JSON.stringify(part)); },
+5151:     partFilePayload: partFilePayload,
+5152:     importPartFile: importPartFile,
+5153:     holeSpacing: function () {
+5154:       var p = holeSpacingPairs();
+5155:       return p ? { gap: p.gap, a: p.a, b: p.b, count: p.count } : null;
+5156:     },
+5157:     getMetrics: function () { return metrics ? JSON.parse(JSON.stringify(metrics)) : null; },
+5158:     loadPart: loadPartIntoEditor,
+5159:     getMesh: function () { return mesh; },
+5160:     testPushPullReplay: pushPullTestReplay,
+5161:     undo: undo,
+5162:     redo: redo,
+5163:     undoDepth: function () { return undoStack.length; },
+5164:     session: function () {
+5165:       return {
+5166:         armed: sessionArmed,
+5167:         savedAt: sessionSavedAt,
+5168:         librarySaved: librarySaved,
+5169:         status: (document.getElementById('session-status') || {}).textContent || '',
+5170:         state: (document.getElementById('session-status') || {}).getAttribute ? document.getElementById('session-status').getAttribute('data-state') : null,
+5171:         banner: !!(document.getElementById('restore-banner') && !document.getElementById('restore-banner').hidden),
+5172:         stored: !!readSession()
+5173:       };
+5174:     },
+5175:     restoreSession: restoreSessionSnapshot,
+5176:     discardSession: discardSessionSnapshot,
+5177:     snapshotNow: function () { writeSessionSnapshot(); return readSession(); },
+5178:     redoDepth: function () { return redoStack.length; }
+5179:   };
+5180: })();

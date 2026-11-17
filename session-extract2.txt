@@ -1,0 +1,677 @@
+4422:     if (!d || isNaN(d.getTime())) return 'an earlier session';
+4423:     var minutes = Math.max(0, Math.floor(((now || Date.now()) - d.getTime()) / 60000));
+4424:     var age;
+4425:     if (minutes < 1) age = 'just now';
+4426:     else if (minutes < 60) age = minutes + (minutes === 1 ? ' minute ago' : ' minutes ago');
+4427:     else if (minutes < 1440) {
+4428:       var hours = Math.floor(minutes / 60);
+4429:       age = hours + (hours === 1 ? ' hour ago' : ' hours ago');
+4430:     } else {
+4431:       var days = Math.floor(minutes / 1440);
+4432:       age = days < 30 ? days + (days === 1 ? ' day ago' : ' days ago') :
+4433:         d.toLocaleDateString() + ' at ' + formatClock(iso);
+4434:     }
+4435:     return age + ' · ' + d.toLocaleString();
+4436:   }
+4437: 
+4438:   function setSessionStatus(text, state, title) {
+4439:     var chip = document.getElementById('session-status');
+4440:     if (!chip) return;
+4441:     chip.textContent = text;
+4442:     chip.setAttribute('data-state', state);
+4443:     if (title) chip.setAttribute('title', title);
+4444:   }
+4445: 
+4446:   function updateLocalOnlyNote() {
+4447:     var note = document.getElementById('local-only-note');
+4448:     if (!note) return;
+4449:     if (!restoredLocalOnly || pendingRestore || librarySaved || (partFileSaved && partFileSavedKey === partKey(part))) {
+4450:       note.hidden = true;
+4451:       return;
+4452:     }
+4453:     var detail = document.getElementById('local-only-detail');
+4454:     if (detail) {
+4455:       detail.textContent = partsLibraryAvailable === false
+4456:         ? 'The server parts library is unavailable, so this restored snapshot is the only copy right now. Clearing site data or switching browsers loses it — save a portable file to keep an editable second copy.'
+4457:         : 'This restored snapshot is not in the server parts library yet. Clearing site data or switching browsers loses it — save a portable file (or Save part) to keep a durable second copy.';
+4458:     }
+4459:     note.hidden = false;
+4460:   }
+4461: 
+4462:   function updateSessionStatus() {
+4463:     updateLocalOnlyNote();
+4464:     if (pendingRestore) {
+4465:       setSessionStatus('Local snapshot found — choose Restore or Discard', 'restore',
+4466:         'A part definition from an earlier session is stored in this browser.');
+4467:       return;
+4468:     }
+4469:     var clock = sessionSavedAt ? formatClock(sessionSavedAt) : '';
+4470:     if (librarySaved) {
+4471:       setSessionStatus('Saved to your library', 'saved',
+4472:         'This part is stored in the server-side parts library. Edited since? Save again to update it.');
+4473:       return;
+4474:     }
+4475:     if (partFileSaved && partFileSavedKey === partKey(part)) {
+4476:       var fileClock = partFileSavedAt ? formatClock(partFileSavedAt) : '';
+4477:       setSessionStatus('Part file saved' + (fileClock ? ' · ' + fileClock : ''), 'exported',
+4478:         partsLibraryAvailable === false
+4479:           ? 'Exported as a portable .websolid.json part file. The server parts library is unavailable.'
+4480:           : 'Exported as a portable .websolid.json part file. Not in the server parts library unless you also use Save part.');
+4481:       return;
+4482:     }
+4483:     if (sessionBlocked && sessionBlockReason === 'write') {
+4484:       setSessionStatus('Not saved — this browser refused storage', 'warning',
+4485:         partsLibraryAvailable === false
+4486:           ? 'The browser would not keep a local snapshot and the server library is unavailable. Export a part file with Save file.'
+4487:           : 'The browser would not keep a local snapshot, so a reload will lose these edits. Export a part file or use Save part.');
+4488:       return;
+4489:     }
+4490:     if (sessionBlocked) {
+4491:       setSessionStatus('Not saved — part too large for this browser', 'warning',
+4492:         'This part is too large for the browser-local snapshot, so a reload will lose these edits. Export a part file.');
+4493:       return;
+4494:     }
+4495:     if (clock) {
+4496:       setSessionStatus('Unsaved changes · ' + clock + ' on this device', 'local',
+4497:         partsLibraryAvailable === false
+4498:           ? DEVICE_ONLY + ' Server parts library is unavailable — use Save file to keep a portable copy.'
+4499:           : DEVICE_ONLY);
+4500:       return;
+4501:     }
+4502:     setSessionStatus('Unsaved changes', 'unsaved',
+4503:       'Nothing is stored yet: no browser-local snapshot and no saved library copy for this part.');
+4504:   }
+4505: 
+4506:   function writeSessionSnapshot(now) {
+4507:     if (!sessionArmed || pendingRestore) return;
+4508:     var key = partKey(part);
+4509:     if (key === null) return;
+4510:     if (key.length > SESSION_MAX_BYTES) {
+4511:       if (sessionBlocked !== true || sessionBlockReason !== 'size') {
+4512:         sessionBlocked = true;
+4513:         sessionBlockReason = 'size';
+4514:         updateSessionStatus();
+4515:       }
+4516:       return;
+4517:     }
+4518:     var stamp = (now || new Date()).toISOString();
+4519:     try {
+4520:       window.localStorage.setItem(SESSION_KEY, JSON.stringify({ v: 1, savedAt: stamp, part: JSON.parse(key) }));
+4521:       sessionSavedAt = stamp;
+4522:       sessionBlocked = false;
+4523:       sessionBlockReason = null;
+4524:     } catch (e) {
+4525:       sessionBlocked = true;
+4526:       sessionBlockReason = 'write';
+4527:       sessionSavedAt = null;
+4528:       updateSessionStatus();
+4529:       return;
+4530:     }
+4531:     if (librarySaved && librarySavedKey !== key) librarySaved = false;
+4532:     if (partFileSaved && partFileSavedKey !== key) partFileSaved = false;
+4533:     updateSessionStatus();
+4534:   }
+4535: 
+4536:   function scheduleSessionSnapshot() {
+4537:     if (!sessionArmed || pendingRestore) return;
+4538:     if (sessionTimer) clearTimeout(sessionTimer);
+4539:     sessionTimer = setTimeout(function () { sessionTimer = null; writeSessionSnapshot(); }, 700);
+4540:   }
+4541: 
+4542:   /* A debounce window is exactly when a crash or a quick tab close loses edits,
+4543:      so flush the pending write as soon as the page stops being visible. */
+4544:   function flushSessionSnapshot() {
+4545:     if (!sessionArmed || pendingRestore) return;
+4546:     if (sessionTimer) { clearTimeout(sessionTimer); sessionTimer = null; }
+4547:     writeSessionSnapshot();
+4548:   }
+4549: 
+4550:   function hideRestoreBanner() {
+4551:     var banner = document.getElementById('restore-banner');
+4552:     if (banner) banner.hidden = true;
+4553:   }
+4554: 
+4555:   function discardSessionSnapshot(reason) {
+4556:     pendingRestore = null;
+4557:     restoredLocalOnly = false;
+4558:     try { window.localStorage.removeItem(SESSION_KEY); } catch (e) {}
+4559:     sessionSavedAt = null;
+4560:     hideRestoreBanner();
+4561:     sessionArmed = true;
+4562:     if (reason) toast(reason);
+4563:     updateSessionStatus();
+4564:   }
+4565: 
+4566:   function restoreSessionSnapshot() {
+4567:     var snap = pendingRestore;
+4568:     pendingRestore = null;
+4569:     hideRestoreBanner();
+4570:     if (!snap) { sessionArmed = true; updateSessionStatus(); return; }
+4571:     sessionArmed = true;
+4572:     sessionSavedAt = snap.savedAt || null;
+4573:     partId = null;
+4574:     loadPartIntoEditor(snap.part, null);
+4575:     librarySaved = false;
+4576:     partFileSaved = false;
+4577:     partFileSavedKey = null;
+4578:     partFileSavedAt = null;
+4579:     restoredLocalOnly = true;
+4580:     toast('Restored the browser-local snapshot from ' + (formatClock(snap.savedAt) || 'earlier') +
+4581:       (partsLibraryAvailable === false
+4582:         ? ' — server library unavailable; use Save file to keep a portable copy'
+4583:         : ' — it is not in the parts library yet'));
+4584:     writeSessionSnapshot();
+4585:   }
+4586: 
+4587:   function initSessionSnapshot() {
+4588:     var snap = readSession();
+4589:     if (!snap) {
+4590:       sessionArmed = true;
+4591:       updateSessionStatus();
+4592:       return;
+4593:     }
+4594:     /* Never prompt for a device copy that is byte-identical to the part on
+4595:        screen: there is nothing to recover and the extra choice is noise. */
+4596:     if (partKey(snap.part) === partKey(part)) {
+4597:       sessionSavedAt = snap.savedAt || null;
+4598:       sessionArmed = true;
+4599:       updateSessionStatus();
+4600:       return;
+4601:     }
+4602:     pendingRestore = snap;
+4603:     var banner = document.getElementById('restore-banner');
+4604:     if (banner) {
+4605:       var name = snap.part && snap.part.name ? String(snap.part.name).slice(0, 60) : 'a part';
+4606:       document.getElementById('restore-name').textContent = name;
+4607:       var when = document.getElementById('restore-when');
+4608:       if (when) when.textContent = formatSnapshotAge(snap.savedAt);
+4609:       var restoreName = document.getElementById('restore-name');
+4610:       if (restoreName) restoreName.textContent = name;
+4611:       var activeEl = document.getElementById('restore-active');
+4612:       var replaceEl = document.getElementById('restore-replace');
+4613:       if (activeEl && replaceEl) {
+4614:         var activeName = part && part.name ? String(part.name).slice(0, 60) : '';
+4615:         if (!activeName) {
+4616:           replaceEl.textContent = 'Restore replaces the part that is open now.';
+4617:         } else if (activeName === name) {
+4618:           replaceEl.textContent = 'A part with the same name is open now. Restore replaces it with the snapshot version.';
+4619:         } else {
+4620:           replaceEl.innerHTML = 'Currently open: <b id="restore-active"></b>. Restore replaces it.';
+4621:           document.getElementById('restore-active').textContent = activeName;
+4622:         }
+4623:       }
+4624:       banner.hidden = false;
+4625:     }
+4626:     updateSessionStatus();
+4627:   }
+4628: 
+4629:   function noteLibrarySave() {
+4630:     librarySaved = true;
+4631:     librarySavedKey = partKey(part);
+4632:     restoredLocalOnly = false;
+4633:     /* A clean library save makes the device copy redundant, so drop it: the next
+4634:        load must not offer to "restore" a part that is already in the library. */
+4635:     if (sessionTimer) { clearTimeout(sessionTimer); sessionTimer = null; }
+4636:     if (sessionSavedAt || readSession()) {
+4637:       try { window.localStorage.removeItem(SESSION_KEY); } catch (e) {}
+4638:     }
+4639:     sessionSavedAt = null;
+4640:     if (sessionBlocked && sessionBlockReason === 'write') { sessionBlocked = false; sessionBlockReason = null; }
+4641:     updateSessionStatus();
+4642:   }
+4643: 
+4644:   var partsLibraryAvailable = null;
+4645:   var saveLibraryButtons = ['btn-save', 'btn-save-as'];
+4646: 
+4647:   /* Storage honesty: the server parts library is only presented as usable once
+4648:      /api/parts has actually answered. Until then (and whenever it fails) both
+4649:      server-save buttons are natively disabled, described by the visible
+4650:      #parts-library-hint disclosure, and the portable Save file remains the
+4651:      advertised path. The buttons keep aria-disabled so assistive technology
+4652:      still reports them as unavailable rather than absent. */
+4653:   var PARTS_UNAVAILABLE_TEXT = 'Server parts library unavailable. Save part and Save as are disabled; use Save file to keep an editable part on this device.';
+4654: 
+4655:   function setPartsLibraryAvailability(available) {
+4656:     partsLibraryAvailable = !!available;
+4657:     saveLibraryButtons.forEach(function (id) {
+4658:       var button = document.getElementById(id);
+4659:       if (!button) return;
+4660:       button.disabled = !available;
+4661:       button.setAttribute('aria-disabled', available ? 'false' : 'true');
+4662:       button.classList.toggle('primary', false);
+4663:       button.setAttribute('aria-describedby', 'parts-library-hint');
+4664:       button.title = available
+4665:         ? (id === 'btn-save' ? 'Save part to the server-side parts library' : 'Save as a new server-side parts-library entry')
+4666:         : PARTS_UNAVAILABLE_TEXT;
+4667:     });
+4668:     var hint = document.getElementById('parts-library-hint');
+4669:     if (hint) {
+4670:       hint.hidden = available;
+4671:       hint.setAttribute('role', 'status');
+4672:       hint.setAttribute('aria-live', 'polite');
+4673:       hint.classList.toggle('hint-warn', !available);
+4674:       hint.textContent = available
+4675:         ? 'Server parts library is available. Save part and Save as store parts in the server library.'
+4676:         : PARTS_UNAVAILABLE_TEXT;
+4677:     }
+4678:     var retry = document.getElementById('btn-parts-retry');
+4679:     if (retry) retry.hidden = !!available;
+4680:     var handoffSave = document.querySelector('.handoff-save');
+4681:     if (handoffSave) {
+4682:       handoffSave.innerHTML = available
+4683:         ? '<strong>Saving:</strong> Save part and the parts library use server-side storage. They are not browser-local or account-synced saves. You can also use <strong>Save file</strong> to export an editable .websolid.json part definition.'
+4684:         : '<strong>Saving:</strong> The server parts library is currently unavailable (Save part and Save as are disabled). Your edits stay only in this browser’s local recovery snapshot until you use <strong>Save file</strong> to download an editable .websolid.json part definition.';
+4685:     }
+4686:     updateSessionStatus();
+4687:   }
+4688: 
+4689:   function refreshPartsList() {
+4690:     var box = document.getElementById('parts-list');
+4691:     fetch('/api/parts')
+4692:       .then(function (r) {
+4693:         if (!r.ok) throw new Error('parts library unavailable');
+4694:         return r.json();
+4695:       })
+4696:       .then(function (data) {
+4697:         setPartsLibraryAvailability(true);
+4698:         box.innerHTML = '';
+4699:         var parts = (data && data.parts) || [];
+4700:         if (!parts.length) {
+4701:           box.innerHTML = '<p class="hint">No parts are saved in the server library yet.</p>';
+4702:           return;
+4703:         }
+4704:         parts.forEach(function (row) {
+4705:           var item = document.createElement('div');
+4706:           item.className = 'part-row' + (String(row.id) === String(partId) ? ' active' : '');
+4707:           var btn = document.createElement('button');
+4708:           btn.className = 'part-load';
+4709:           var vol = row.volume_mm3 ? (Number(row.volume_mm3) / 1000).toFixed(1) + ' cm3' : 'unsaved';
+4710:           btn.innerHTML = '<b>' + escapeHtml(row.name) + '</b><em>' + vol + '</em>';
+4711:           btn.addEventListener('click', function () {
+4712:             var pk = row.payload || {};
+4713:             restoredLocalOnly = false;
+4714:             loadPartIntoEditor(pk, row.id);
+4715:             updateSessionStatus();
+4716:             toast('Loaded ' + row.name);
+4717:           });
+4718:           var del = document.createElement('button');
+4719:           del.className = 'part-del';
+4720:           del.textContent = 'x';
+4721:           del.title = 'Delete part';
+4722:           del.addEventListener('click', function (ev) {
+4723:             ev.stopPropagation();
+4724:             fetch('/api/parts/' + row.id, { method: 'DELETE' }).then(function () {
+4725:               if (String(row.id) === String(partId)) partId = null;
+4726:               refreshPartsList();
+4727:               toast('Deleted ' + row.name);
+4728:             });
+4729:           });
+4730:           item.appendChild(btn);
+4731:           item.appendChild(del);
+4732:           box.appendChild(item);
+4733:         });
+4734:       })
+4735:       .catch(function () {
+4736:         setPartsLibraryAvailability(false);
+4737:         /* Keep one authoritative #parts-library-hint (outside this list) so the
+4738:            disclosure is never duplicated and the retry control stays reachable. */
+4739:         box.innerHTML = '<p class="hint">Saved parts could not be loaded.</p>'
+4740:           + '<button id="btn-parts-retry" class="tool wide" type="button">Try again</button>';
+4741:         var retry = document.getElementById('btn-parts-retry');
+4742:         if (retry) retry.addEventListener('click', function () { refreshPartsList(); });
+4743:       });
+4744:   }
+4745: 
+4746:   function escapeHtml(s) {
+4747:     return String(s).replace(/[&<>"']/g, function (ch) {
+4748:       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+4749:     });
+4750:   }
+4751: 
+4752:   function savePart(forceNew) {
+4753:     if (partsLibraryAvailable !== true) {
+4754:       toast('Server parts library unavailable. Use Save file to keep your work.', true);
+4755:       return;
+4756:     }
+4757:     var name = part.name && part.name.trim();
+4758:     if (!name) { toast('Give the part a name first', true); return; }
+4759:     var body = JSON.stringify({
+4760:       name: name,
+4761:       payload: part,
+4762:       volume_mm3: metrics ? metrics.volumeMm3 : null,
+4763:       mass_g: metrics ? metrics.massG : null
+4764:     });
+4765:     var update = partId && !forceNew;
+4766:     var url = update ? '/api/parts/' + partId : '/api/parts';
+4767:     var method = update ? 'PUT' : 'POST';
+4768:     fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: body })
+4769:       .then(function (r) {
+4770:         if (!r.ok) throw new Error('save failed');
+4771:         return r.json();
+4772:       })
+4773:       .then(function (row) {
+4774:         partId = row.id;
+4775:         noteLibrarySave();
+4776:         toast((update ? 'Updated "' : 'Saved "') + row.name + '" in the server parts library');
+4777:         refreshPartsList();
+4778:       })
+4779:       .catch(function () {
+4780:         setPartsLibraryAvailability(false);
+4781:         toast('Server parts library unavailable. Use Save file to keep your work.', true);
+4782:       });
+4783:   }
+4784: 
+4785:   /* Portable part file: the editable parametric definition as JSON.
+4786:      This is deliberately not a mesh or an account object: it holds only what
+4787:      sanitizePart() produces, so it re-opens into the same feature tree and
+4788:      cannot carry geometry that the modeler would not build itself. */
+4789:   var PART_FILE_VERSION = 1;
+4790:   var PART_FILE_MAX_BYTES = 2000000;
+4791: 
+4792:   function partFilePayload() {
+4793:     return {
+4794:       format: 'websolid-part',
+4795:       version: PART_FILE_VERSION,
+4796:       savedAt: new Date().toISOString(),
+4797:       app: 'WebSolid parametric part modeler',
+4798:       note: 'Editable part definition only: sketch, features, holes, material, equations. No mesh, no account state.',
+4799:       part: sanitizePart(part)
+4800:     };
+4801:   }
+4802: 
+4803:   function notePartFileSave(savedAt) {
+4804:     partFileSaved = true;
+4805:     partFileSavedKey = partKey(part);
+4806:     partFileSavedAt = savedAt || new Date().toISOString();
+4807:     restoredLocalOnly = false;
+4808:     updateSessionStatus();
+4809:   }
+4810: 
+4811:   function exportPartFile() {
+4812:     var payload = partFilePayload();
+4813:     var text = JSON.stringify(payload, null, 2);
+4814:     var blob = new Blob([text], { type: 'application/json' });
+4815:     var url = URL.createObjectURL(blob);
+4816:     var link = document.createElement('a');
+4817:     link.href = url;
+4818:     link.download = (part.name || 'part').replace(/[^a-z0-9\-_]+/gi, '-').toLowerCase() + '.websolid.json';
+4819:     document.body.appendChild(link);
+4820:     link.click();
+4821:     document.body.removeChild(link);
+4822:     setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+4823:     notePartFileSave(payload.savedAt);
+4824:     toast('Part file saved — editable definition only, no mesh');
+4825:   }
+4826: 
+4827:   function importPartFile(text) {
+4828:     var data;
+4829:     try { data = JSON.parse(text); } catch (e) { toast('That file is not valid JSON', true); return false; }
+4830:     if (!data || typeof data !== 'object' || data.format !== 'websolid-part') {
+4831:       toast('That JSON file is not a WebSolid part file', true);
+4832:       return false;
+4833:     }
+4834:     if (!data.part || typeof data.part !== 'object') {
+4835:       toast('The part file has no part definition', true);
+4836:       return false;
+4837:     }
+4838:     part = sanitizePart(data.part);
+4839:     partId = null;
+4840:     librarySaved = false;
+4841:     librarySavedKey = null;
+4842:     partFileSaved = false;
+4843:     partFileSavedKey = null;
+4844:     partFileSavedAt = null;
+4845:     restoredLocalOnly = false;
+4846:     renderAll();
+4847:     fitView();
+4848:     writeSessionSnapshot();
+4849:     toast('Opened ' + (part.name || 'part') +
+4850:       (partsLibraryAvailable === false
+4851:         ? ' from part file — server library unavailable; use Save file after edits'
+4852:         : ' — not in the parts library yet'));
+4853:     return true;
+4854:   }
+4855: 
+4856:   function openPartFile() {
+4857:     var input = document.getElementById('file-open');
+4858:     if (!input) return;
+4859:     input.value = '';
+4860:     input.click();
+4861:   }
+4862: 
+4863:   function readPartFile(input) {
+4864:     var file = input.files && input.files[0];
+4865:     if (!file) return;
+4866:     if (file.size > PART_FILE_MAX_BYTES) { toast('Part files must be smaller than 2 MB', true); return; }
+4867:     var reader = new FileReader();
+4868:     reader.onerror = function () { toast('Could not read the part file', true); };
+4869:     reader.onload = function () { importPartFile(String(reader.result || '')); };
+4870:     reader.readAsText(file);
+4871:   }
+4872: 
+4873:   // Start a fresh design. Clears partId so the next save inserts a new row
+4874:   // instead of silently overwriting the part that was open.
+4875:   function newPart() {
+4876:     part = defaultPart();
+4877:     part.name = 'Untitled part';
+4878:     partId = null;
+4879:     rebuild();
+4880:     refreshPartsList();
+4881:     fitView();
+4882:     document.getElementById('part-name').setAttribute('title', 'Click to rename');
+4883:     librarySaved = false;
+4884:     librarySavedKey = null;
+4885:     partFileSaved = false;
+4886:     partFileSavedKey = null;
+4887:     partFileSavedAt = null;
+4888:     restoredLocalOnly = false;
+4889:     writeSessionSnapshot();
+4890:     toast(partsLibraryAvailable === false
+4891:       ? 'New part - rename it, then use Save file to keep a portable copy'
+4892:       : 'New part - rename it, then Save part');
+4893:   }
+4894: 
+4895:   /* --------------------------------------------------------- undo / redo
+4896:      Every committed edit funnels through rebuild(). When the part state
+4897:      actually changed we push a sanitized snapshot onto a depth-capped
+4898:      stack, clear the forward stack, and update the Undo/Redo buttons.
+4899:      Undo/redo restore a snapshot without pushing, so the two stacks walk
+4900:      a single linear history. */
+4901: 
+4902:   var undoStack = [];
+4903:   var redoStack = [];
+4904:   var UNDO_MAX = 50;
+4905:   var undoGuard = false;
+4906:   var lastSnapshot = null;
+4907: 
+4908:   function snapshotOf() {
+4909:     return JSON.parse(JSON.stringify(sanitizePart(part)));
+4910:   }
+4911: 
+4912:   function updateUndoButtons() {
+4913:     var b1 = document.getElementById('btn-undo');
+4914:     var b2 = document.getElementById('btn-redo');
+4915:     if (b1) b1.disabled = !undoStack.length;
+4916:     if (b2) b2.disabled = !redoStack.length;
+4917:   }
+4918: 
+4919:   function applySnapshot(state, toastMsg) {
+4920:     undoGuard = true;
+4921:     try {
+4922:       var st = typeof state === 'string' ? JSON.parse(state) : state;
+4923:       part = sanitizePart(st);
+4924:       lastSnapshot = JSON.stringify(part);
+4925:       renderAll();
+4926:       refreshPartsList();
+4927:       if (toastMsg) toast(toastMsg);
+4928:     } finally {
+4929:       undoGuard = false;
+4930:     }
+4931:   }
+4932: 
+4933:   function undo() {
+4934:     if (!undoStack.length) return;
+4935:     var cur = lastSnapshot !== null ? lastSnapshot : JSON.stringify(snapshotOf());
+4936:     redoStack.push(cur);
+4937:     if (redoStack.length > UNDO_MAX) redoStack.shift();
+4938:     applySnapshot(undoStack.pop(), 'Undo');
+4939:     updateUndoButtons();
+4940:   }
+4941: 
+4942:   function redo() {
+4943:     if (!redoStack.length) return;
+4944:     var cur = lastSnapshot !== null ? lastSnapshot : JSON.stringify(snapshotOf());
+4945:     undoStack.push(cur);
+4946:     if (undoStack.length > UNDO_MAX) undoStack.shift();
+4947:     applySnapshot(redoStack.pop(), 'Redo');
+4948:     updateUndoButtons();
+4949:   }
+4950: 
+4951:   function pushUndo() {
+4952:     if (undoGuard) return;
+4953:     var snap = snapshotOf();
+4954:     var key = JSON.stringify(snap);
+4955:     if (key === lastSnapshot) return;
+4956:     var first = lastSnapshot === null;
+4957:     if (!first) {
+4958:       undoStack.push(lastSnapshot);
+4959:       if (undoStack.length > UNDO_MAX) undoStack.shift();
+4960:     }
+4961:     redoStack.length = 0;
+4962:     lastSnapshot = key;
+4963:     updateUndoButtons();
+4964:   }
+4965: 
+4966:   /* ----------------------------------------------------------------- boot */
+4967: 
+4968:   function wireControls() {
+4969:     var viewButtons = document.querySelectorAll('.toolbar .tool[data-view]');
+4970:     for (var i = 0; i < viewButtons.length; i++) {
+4971:       (function (btn) {
+4972:         btn.addEventListener('click', function () { setView(btn.getAttribute('data-view')); });
+4973:       })(viewButtons[i]);
+4974:     }
+4975: 
+4976:     document.getElementById('btn-fit').addEventListener('click', fitView);
+4977:     document.getElementById('btn-pushpull').addEventListener('click', togglePushPull);
+4978:     document.getElementById('btn-measure').addEventListener('click', toggleMeasure);
+4979:     document.getElementById('pushpull-distance').addEventListener('input', updatePushPullPreview);
+4980:     document.getElementById('pushpull-apply').addEventListener('click', commitPushPull);
+4981:     document.getElementById('pushpull-cancel').addEventListener('click', function () { closePushPull(); });
+4982:     var coachClose = document.getElementById('pushpull-coach-close');
+4983:     if (coachClose) coachClose.addEventListener('click', dismissPushPullCoach);
+4984:     document.getElementById('btn-stl').addEventListener('click', function () { openExportHandoff('stl', exportStl); });
+4985:     var handoffPanel = document.getElementById('handoff-panel');
+4986:     var handoffToggle = document.getElementById('btn-handoff');
+4987:     var handoffClose = document.getElementById('btn-handoff-close');
+4988:     function setHandoffOpen(open) {
+4989:       var confirmExport = document.getElementById('btn-handoff-export');
+4990:       confirmExport.hidden = true;
+4991:       confirmExport.onclick = null;
+4992:       document.getElementById('handoff-checklist').replaceChildren();
+4993:       document.getElementById('handoff-summary').textContent = 'Choose an export to review its handoff details before downloading.';
+4994:       handoffPanel.hidden = !open;
+4995:       handoffToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+4996:       if (open) handoffClose.focus(); else handoffToggle.focus();
+4997:     }
+4998:     handoffToggle.addEventListener('click', function () { setHandoffOpen(handoffPanel.hidden); });
+4999:     handoffClose.addEventListener('click', function () { setHandoffOpen(false); });
+5000:     handoffPanel.addEventListener('keydown', function (ev) {
+5001:       if (ev.key === 'Escape') { ev.preventDefault(); setHandoffOpen(false); }
+5002:     });
+5003:     document.getElementById('btn-dxf').addEventListener('click', function () { openExportHandoff('dxf', exportDxf); });
+5004:     document.getElementById('btn-drawing').addEventListener('click', function () { openExportHandoff('svg', exportDrawing); });
+5005:     document.getElementById('btn-bom').addEventListener('click', function () { openExportHandoff('csv', exportBom); });
+5006:     document.getElementById('btn-printability').addEventListener('click', runPrintability);
+5007:     var printProfile = document.getElementById('print-profile');
+5008:     if (printProfile) {
+5009:       if (part.printability && part.printability.profile) printProfile.value = part.printability.profile;
+5010:       printProfile.addEventListener('change', function (e) {
+5011:         part.printability = part.printability || {};
+5012:         part.printability.profile = e.target.value;
+5013:         runPrintability();
+5014:       });
+5015:     }
+5016:     var btnSaveFile = document.getElementById('btn-savefile');
+5017:     if (btnSaveFile) btnSaveFile.addEventListener('click', function () { exportPartFile(); });
+5018:     var btnOpenFile = document.getElementById('btn-openfile');
+5019:     var fileOpen = document.getElementById('file-open');
+5020:     if (btnOpenFile) btnOpenFile.addEventListener('click', openPartFile);
+5021:     if (fileOpen) fileOpen.addEventListener('change', function () { readPartFile(fileOpen); });
+5022:     document.getElementById('btn-save').addEventListener('click', function () {
+5023:       if (partsLibraryAvailable !== true) {
+5024:         toast('Server parts library unavailable. Use Save file to keep your work.', true);
+5025:         return;
+5026:       }
+5027:       savePart(false);
+5028:     });
+5029:     document.getElementById('btn-save-as').addEventListener('click', function () {
+5030:       if (partsLibraryAvailable !== true) {
+5031:         toast('Server parts library unavailable. Use Save file to keep your work.', true);
+5032:         return;
+5033:       }
+5034:       var next = window.prompt('Save as a new part named', (part.name || 'Part') + ' copy');
+5035:       if (!next || !next.trim()) return;
+5036:       part.name = next.trim().slice(0, 160);
+5037:       rebuild();
+5038:       savePart(true);
+5039:     });
+5040:     document.getElementById('btn-new').addEventListener('click', newPart);
+5041:     var btnRestore = document.getElementById('btn-restore-session');
+5042:     if (btnRestore) btnRestore.addEventListener('click', restoreSessionSnapshot);
+5043:     document.addEventListener('visibilitychange', function () {
+5044:       if (document.visibilityState === 'hidden') flushSessionSnapshot();
+5045:     });
+5046:     window.addEventListener('pagehide', flushSessionSnapshot);
+5047:     window.addEventListener('beforeunload', flushSessionSnapshot);
+5048:     var btnDiscard = document.getElementById('btn-discard-session');
+5049:     if (btnDiscard) btnDiscard.addEventListener('click', function () {
+5050:       discardSessionSnapshot('Discarded the browser-local snapshot');
+5051:     });
+5052:     var btnLocalOnlySave = document.getElementById('btn-local-only-save');
+5053:     if (btnLocalOnlySave) btnLocalOnlySave.addEventListener('click', function () {
+5054:       exportPartFile();
+5055:     });
+5056:     var btnLocalOnlyDismiss = document.getElementById('btn-local-only-dismiss');
+5057:     if (btnLocalOnlyDismiss) btnLocalOnlyDismiss.addEventListener('click', function () {
+5058:       restoredLocalOnly = false;
+5059:       updateSessionStatus();
+5060:     });
+5061:     var btnUndo = document.getElementById('btn-undo');
+5062:     var btnRedo = document.getElementById('btn-redo');
+5063:     if (btnUndo) btnUndo.addEventListener('click', undo);
+5064:     if (btnRedo) btnRedo.addEventListener('click', redo);
+5065: 
+5066:     var minWallInput = document.getElementById('min-wall');
+5067:     if (minWallInput) {
+5068:       minWallInput.value = num(part.minWall, 2);
+5069:       minWallInput.addEventListener('change', function (e) {
+5070:         var v = parseFloat(e.target.value);
+5071:         part.minWall = isFinite(v) && v >= 0 ? v : 2;
+5072:         renderAll();
+5073:       });
+5074:     }
+5075: 
+5076:     document.getElementById('btn-add-hole').addEventListener('click', function () {
+5077:       part.holes.push({ x: 0, y: 0, d: 6 });
+5078:       recordMacro('Add hole - Cut' + part.holes.length + ' Dia 6 mm');
+5079:       renderAll();
+5080:       toast('Hole added - drag the centre with X / Y');
+5081:     });
+5082: 
+5083:     document.getElementById('tg-edges').addEventListener('change', function (e) {
+5084:       view.edges = e.target.checked;
+5085:       if (edgeLines) edgeLines.visible = view.edges && !view.wire;
+5086:       needRender = true;
+5087:     });
+5088:     document.getElementById('tg-grid').addEventListener('change', function (e) {
+5089:       gridHelper.visible = e.target.checked;
+5090:       axes.visible = e.target.checked;
+5091:       needRender = true;
+5092:     });
+5093:     document.getElementById('tg-sketch').addEventListener('change', function (e) {
+5094:       view.sketch = e.target.checked;
+5095:       if (metrics) rebuild();
+5096:     });
+5097:     document.getElementById('tg-wire').addEventListener('change', function (e) {
+5098:       view.wire = e.target.checked;
