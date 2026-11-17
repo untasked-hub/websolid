@@ -129,7 +129,78 @@
     return lines.join('\n');
   }
 
-  var api = { buildSummary: buildSummary, FOOTER: FOOTER, TITLE: TITLE };
+
+  /* One-click print setup brief: a portable, human-readable text brief a maker
+     can keep next to a .websolid.json part file. Same rules as buildSummary:
+     pure formatting of the ctx it is given, no DOM, no network, no clock. */
+  var BRIEF_TITLE = 'WebSolid print setup brief';
+
+  function briefSetupLine(s) {
+    var bits = [];
+    if (isNum(s.layerMm)) bits.push('layer ' + fixed(s.layerMm, 2) + ' mm');
+    if (isNum(s.nozzleMm)) bits.push('nozzle ' + fixed(s.nozzleMm, 2) + ' mm');
+    if (isNum(s.perimeters)) bits.push(s.perimeters + ' perimeters');
+    if (isNum(s.infill)) bits.push(Math.round(s.infill * 100) + '% infill');
+    if (isNum(s.speedMmS)) bits.push(fixed(s.speedMmS, 0) + ' mm/s');
+    return bits.length ? 'Slicer setup (assumed, not slicer-verified): ' + bits.join(' · ') : null;
+  }
+
+  function buildPrintBrief(ctx) {
+    ctx = ctx || {};
+    var s = ctx.setup || {};
+    var lines = [BRIEF_TITLE, partLine(ctx)];
+    lines.push('Units: millimetres (mm). Coordinates and dimensions as shown in the modeler.');
+    var size = sizeLine(ctx.metrics);
+    if (size) lines.push(size);
+    var m = materialLine(ctx);
+    if (m) lines.push(m);
+    var setup = briefSetupLine(s);
+    if (setup) lines.push(setup);
+    if (isNum(s.filamentDiameterMm)) lines.push('Filament: ' + fixed(s.filamentDiameterMm, 2) + ' mm diameter');
+    var est = [];
+    if (isNum(s.estMinutes)) {
+      est.push('≈ ' + Math.round(s.estMinutes) + ' min print time');
+      if (isNum(s.estLowMinutes) && isNum(s.estHighMinutes)) {
+        est[est.length - 1] += ' (range ' + Math.round(s.estLowMinutes) + '–' + Math.round(s.estHighMinutes) + ' min)';
+      }
+    }
+    if (isNum(s.layers)) est.push(s.layers + ' layers over ' + fixed(s.heightMm, 1) + ' mm height');
+    if (isNum(s.filamentGrams)) est.push('≈ ' + fixed(s.filamentGrams, 1) + ' g filament' + (isNum(s.filamentMetres) ? ' (≈ ' + fixed(s.filamentMetres, 2) + ' m)' : ''));
+    if (est.length) lines.push('Estimated print: ' + est.join(' · '));
+    var c = costLine(ctx);
+    if (c) lines.push(c);
+    lines = lines.concat(printLines(ctx));
+    lines = lines.concat(preflightLines(ctx));
+    lines.push('', 'This brief is an estimate from the browser-local model, not a slicer profile or a guarantee. Verify settings in your slicer before printing. Nothing was uploaded.');
+    return lines.join('\n');
+  }
+
+  var ESTIMATE_TITLE = 'WebSolid material & estimate summary';
+
+  function buildEstimateSummary(ctx) {
+    ctx = ctx || {};
+    var lines = [ESTIMATE_TITLE, partLine(ctx)];
+    var size = sizeLine(ctx.metrics);
+    if (size) lines.push(size);
+    var m = materialLine(ctx);
+    if (m) lines.push(m);
+    var c = costLine(ctx);
+    if (c) lines.push(c);
+    var s = ctx.setup || {};
+    var est = [];
+    if (isNum(s.filamentGrams)) est.push('\u2248 ' + fixed(s.filamentGrams, 1) + ' g filament' + (isNum(s.filamentMetres) ? ' (\u2248 ' + fixed(s.filamentMetres, 2) + ' m)' : ''));
+    if (isNum(s.estMinutes)) {
+      var t = '\u2248 ' + Math.round(s.estMinutes) + ' min print time';
+      if (isNum(s.estLowMinutes) && isNum(s.estHighMinutes)) t += ' (range ' + Math.round(s.estLowMinutes) + '\u2013' + Math.round(s.estHighMinutes) + ' min)';
+      est.push(t);
+    }
+    if (isNum(s.layers)) est.push(s.layers + ' layers' + (isNum(s.heightMm) ? ' over ' + fixed(s.heightMm, 1) + ' mm height' : ''));
+    if (est.length) lines.push('Print estimate: ' + est.join(' \u00b7 '));
+    lines.push('', 'Estimate from the browser-local model with the inputs shown; not a quote or a slicer guarantee. Replace with supplier pricing before ordering. Nothing was uploaded.');
+    return lines.join('\n');
+  }
+
+  var api = { buildSummary: buildSummary, buildPrintBrief: buildPrintBrief, buildEstimateSummary: buildEstimateSummary, FOOTER: FOOTER, TITLE: TITLE, BRIEF_TITLE: BRIEF_TITLE, ESTIMATE_TITLE: ESTIMATE_TITLE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.SolidCheckSummary = api;
 })(typeof window !== 'undefined' ? window : this);

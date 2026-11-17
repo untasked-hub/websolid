@@ -82,13 +82,17 @@
         </div>
         <div class="restore-actions">
           <button id="btn-restore-session" class="tool primary" type="button">Restore</button>
+          <button id="btn-save-snapshot" class="tool" type="button" title="Download the stored snapshot as an editable .websolid.json part file without restoring it or deleting it from this browser">Save snapshot as file</button>
           <button id="btn-discard-session" class="tool" type="button" title="Keep the part that is open now and discard the browser-local recovery snapshot; this cannot be undone">Keep open part &amp; discard snapshot</button>
         </div>
       </div>
       <div id="local-only-note" class="local-only-note" role="status" aria-live="polite" hidden>
         <div class="local-only-copy">
           <strong id="local-only-title">This part exists only in this browser</strong>
-          <span id="local-only-detail">A browser-local recovery snapshot is the only copy right now. Clearing site data or switching browsers loses it — save a portable file to keep an editable second copy. WebSolid cannot check whether an exported file is still on your device.</span>
+          <details class="local-only-details">
+            <summary><span id="local-only-summary">Details</span></summary>
+            <span id="local-only-detail">A browser-local recovery snapshot is the only copy right now. Clearing site data or switching browsers loses it — save a portable file to keep an editable second copy. WebSolid cannot check whether an exported file is still on your device.</span>
+          </details>
         </div>
         <div class="local-only-actions">
           <button id="btn-local-only-save" class="tool primary" type="button" title="Download this part as an editable .websolid.json part file">Save file</button>
@@ -145,7 +149,7 @@
       <h2>Mass properties</h2>
       <dl class="readout">
         <dt>Volume</dt><dd id="rp-vol">—</dd>
-        <dt>Mass</dt><dd id="rp-mass">—</dd>
+        <dt>Solid mass</dt><dd id="rp-mass">—</dd>
         <dt>Surface area</dt><dd id="rp-area">—</dd>
         <dt>Bounding box</dt><dd id="rp-bbox">—</dd>
         <dt>Faces (est.)</dt><dd id="rp-faces">—</dd>
@@ -163,11 +167,15 @@
 
       <h2>Cost estimate</h2>
       <dl class="readout" id="cost-readout">
-        <dt>Raw material</dt><dd id="cost-raw">—</dd>
-        <dt>Drilling</dt><dd id="cost-drill">—</dd>
-        <dt>Total</dt><dd id="cost-total">—</dd>
+        <dt>Solid material</dt><dd id="cost-raw">—</dd>
+        <dt>Drilling proxy</dt><dd id="cost-drill">—</dd>
+        <dt>Material + drilling</dt><dd id="cost-total">—</dd>
+        <dt>Print time</dt><dd id="cost-printtime">—</dd>
+        <dt>Slicer filament</dt><dd id="cost-filament">—</dd>
       </dl>
       <p class="hint" id="cost-note"></p>
+      <p class="hint cost-disclosure" id="cost-disclosure">Solid material and its cost use the modeled solid volume, so they describe the part itself. The slicer filament line estimates what a 1.75 mm FDM printer would actually feed at the print-time settings, so infill lowers it below the solid mass. The total adds a machining-style drilling proxy, so it is not an FDM print quote.</p>
+      <p class="hint" id="cost-printtime-inputs">Print time inputs will appear with the current part.</p>
       <div class="cost-basis" id="cost-basis-block">
         <div class="cost-basis-head">
           <strong>Computed from</strong>
@@ -191,7 +199,9 @@
       </div>
       <details class="estimate-details" id="cost-assumptions">
         <summary>How this estimate works</summary>
-        <p>Raw material uses modeled volume × selected material density × configured price per kilogram. Drilling is a simple per-hole proxy based on estimated removed volume and hole-seat type.</p>
+        <p>Solid material uses modeled volume × selected material density × configured price per kilogram. Drilling is a simple per-hole proxy based on estimated removed volume and hole-seat type.</p>
+        <p>Print time is a separate estimate from layer height, line width, perimeters, infill, speed, and part height. Infill does not change the solid mass or material cost above.</p>
+        <p>Slicer filament converts the estimated extruded volume into grams (× the selected material density) and metres of 1.75 mm filament (volume ÷ 2.405 mm² cross-section). It reflects walls plus infill, so it is normally lighter than the solid mass. Change the profile infill, perimeters, or line width to see it move.</p>
         <p id="cost-assumption-inputs" class="hint">Inputs will update with the current part and material.</p>
         <p class="hint">This estimate excludes labor, waste, machine setup, taxes, and supplier variation. It is advisory, not a quote.</p>
       </details>
@@ -209,6 +219,8 @@
         </select>
         <button id="btn-printability" class="tool" title="Run mesh printability checks">Check</button>
         <button id="btn-copy-summary" class="tool" title="Copy a text summary of the current inputs and check results for handoff">Copy summary</button>
+        <button id="btn-print-brief" class="tool" title="Download a one-page print setup brief (units, material, nozzle assumptions, estimates, warnings) as a text file">Print brief</button>
+        <button id="btn-copy-estimate" class="tool" title="Copy a plain-text material and cost/estimate summary for pasting into notes, quotes, or a printer profile">Copy estimate</button>
       </div>
       <div class="fields print-th" id="print-th-fields"></div>
       <p id="print-stale" class="print-stale" role="status" aria-live="polite" hidden></p>

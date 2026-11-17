@@ -83,6 +83,51 @@
     return { blocking: blocking, advisory: advisory };
   }
 
+  /* Maps a preflight line to the parameter control that causes it, so a warning
+     can offer a one-click jump to the field the maker has to edit. Matching is
+     by message prefix; anything unmatched simply gets no Fix action. */
+  function preflightFixFor(text) {
+    var t = String(text || '');
+    if (t.indexOf('Minimum nominal hole-to-profile clearance') === 0) {
+      return { label: 'min wall', selector: '#min-wall' };
+    }
+    if (t.indexOf('Nominal hole circles overlap or touch') === 0) {
+      return { label: 'hole 1 diameter', selector: '[data-eqpath="holes.0.d"]' };
+    }
+    if (t.indexOf('Hole ') === 0 && t.indexOf('circle crosses or lies outside') > 0) {
+      var m = /^Hole (\d+)/.exec(t);
+      var idx = m ? Math.max(0, Number(m[1]) - 1) : 0;
+      return { label: 'hole ' + (idx + 1) + ' position', selector: '[data-eqpath="holes.' + idx + '.x"]' };
+    }
+    if (t.indexOf('Fit envelope: part exceeds') === 0) {
+      return { label: 'fit envelope', selector: '[data-fix="envelope"]' };
+    }
+    if (t.indexOf('Printability estimates: stale') === 0 || t.indexOf('Printability estimates have not been run') === 0) {
+      return { label: 'run Check', selector: '#btn-printability' };
+    }
+    return null;
+  }
+
+  /* Focuses the mapped control and flashes it so the maker can see where the
+     warning comes from. Never changes a value. */
+  function focusPreflightFix(selector) {
+    var el = document.querySelector(selector);
+    if (!el) { toast('That control is not on screen right now', true); return; }
+    if (el.type === 'checkbox' || el.tagName === 'BUTTON') {
+      el.focus();
+    } else {
+      el.focus();
+      if (typeof el.select === 'function') { try { el.select(); } catch (e) {} }
+    }
+    if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    var host = el.closest ? (el.closest('.field') || el) : el;
+    host.classList.remove('fix-flash');
+    /* restart the animation when the same target is clicked twice */
+    void host.offsetWidth;
+    host.classList.add('fix-flash');
+    setTimeout(function () { host.classList.remove('fix-flash'); }, 1800);
+  }
+
   function renderPreflight() {
     var report = buildPreflight();
     var targets = [
@@ -96,7 +141,21 @@
       target.items.forEach(function (text) {
         var li = document.createElement('li');
         li.className = target.kind;
-        li.textContent = text;
+        var span = document.createElement('span');
+        span.className = 'preflight-text';
+        span.textContent = text;
+        li.appendChild(span);
+        var fix = preflightFixFor(text);
+        if (fix) {
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'preflight-fix';
+          btn.textContent = 'Fix: ' + fix.label;
+          btn.title = 'Jump to the ' + fix.label + ' control that causes this line';
+          btn.setAttribute('aria-label', 'Fix: go to ' + fix.label);
+          btn.addEventListener('click', function () { focusPreflightFix(fix.selector); });
+          li.appendChild(btn);
+        }
         list.appendChild(li);
       });
     });
@@ -1524,6 +1583,16 @@
       (part.material || 'selected material') + '; ' + fmt(est.pricePerKg, 2) + ' €/kg; ' +
       est.holeCount + ' modeled hole' + (est.holeCount === 1 ? '' : 's') +
       '. The drilling component is a heuristic, not a machine-time calculation.';
+    var pe = computePrintEstimate(metrics, part);
+    setT('cost-printtime', '≈ ' + formatPrintTime(pe.minutes) +
+      ' (' + formatPrintTime(pe.lowMinutes) + ' – ' + formatPrintTime(pe.highMinutes) + ')');
+    var fe = computeFilamentEstimate(pe, mat.density);
+    setT('cost-filament', fmt(fe.grams, 1) + ' g  (≈ ' + fmt(fe.metres, 2) + ' m of ' +
+      fe.diameterMm + ' mm filament)');
+    setT('cost-printtime-inputs', pe.inputs.layerMm + ' mm layers · ' + pe.inputs.nozzleMm +
+      ' mm line width · ' + pe.inputs.perimeters + ' perimeters · ' +
+      Math.round(pe.inputs.infill * 100) + '% infill · ' + pe.inputs.speedMmS + ' mm/s · ' +
+      pe.layers + ' layers over ' + fmt(pe.heightMm, 1) + ' mm height');
   }
 
   function renderReadout(mat) {
@@ -3272,11 +3341,14 @@
     });
     envWrap.appendChild(envRow);
     ['x', 'y', 'z'].forEach(function (axis) {
-      envWrap.appendChild(numberField('Envelope ' + axis.toUpperCase(), part.envelope[axis], 'mm', function (v) {
+      var envField = numberField('Envelope ' + axis.toUpperCase(), part.envelope[axis], 'mm', function (v) {
         editingEnvelopeField = true;
         part.envelope[axis] = Math.min(20000, Math.max(1, v));
         rebuild();
-      }, 1, null, { min: 1, max: 20000, note: 'target build volume axis size' }));
+      }, 1, null, { min: 1, max: 20000, note: 'target build volume axis size' });
+      /* Anchor for the preflight "Fix: fit envelope" action. */
+      envField.setAttribute('data-fix', 'envelope');
+      envWrap.appendChild(envField);
     });
     var envHint = document.createElement('p');
     envHint.className = 'hint';
@@ -4193,8 +4265,7 @@
     return 'WebSolid check summary\nPart: ' + ctx.name;
   }
 
-  function copyCheckSummary() {
-    var txt = currentCheckSummary();
+  function copyTextToClipboard(txt, successMsg) {
     function fallback() {
       var ta = document.createElement('textarea');
       ta.value = txt;
@@ -4206,11 +4277,76 @@
       var ok = false;
       try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
       document.body.removeChild(ta);
-      toast(ok ? 'Check summary copied to clipboard' : 'Copy failed — clipboard unavailable', !ok);
+      toast(ok ? successMsg : 'Copy failed — clipboard unavailable', !ok);
     }
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(txt).then(function () { toast('Check summary copied to clipboard'); }, fallback);
+      navigator.clipboard.writeText(txt).then(function () { toast(successMsg); }, fallback);
     } else fallback();
+  }
+
+  function copyCheckSummary() {
+    copyTextToClipboard(currentCheckSummary(), 'Check summary copied to clipboard');
+  }
+
+  function currentEstimateSummary() {
+    var ctx = currentPrintBriefContext();
+    if (window.SolidCheckSummary && window.SolidCheckSummary.buildEstimateSummary) {
+      return window.SolidCheckSummary.buildEstimateSummary(ctx);
+    }
+    return 'WebSolid material & estimate summary\nPart: ' + (ctx.name || 'Untitled part');
+  }
+
+  function copyEstimateSummary() {
+    copyTextToClipboard(currentEstimateSummary(), 'Material & estimate summary copied to clipboard');
+  }
+
+  function currentPrintBriefContext() {
+    refreshPrintStaleness();
+    var mat = findMaterial(part.material);
+    var pk = num(part.costPrice && part.costPrice[part.material], COST.pricePerKg[part.material]);
+    var est = metrics ? computeCostEstimate(part, mat, metrics.volumeMm3, mirroredHoles(), pk) : null;
+    var b = est ? est.basis : costBasisFor(part, mat, pk);
+    var pf = buildPreflight();
+    var pe = metrics ? computePrintEstimate(metrics, part) : null;
+    var fe = pe ? computeFilamentEstimate(pe, mat.density) : null;
+    return {
+      name: part.name || 'Untitled part',
+      feature: part.feature,
+      metrics: metrics ? { volumeCm3: metrics.volumeCm3, massG: metrics.massG, bbox: metrics.bbox, tris: metrics.tris } : null,
+      material: b ? { id: b.materialId, name: b.materialName, density: b.density, pricePerKg: b.pricePerKg, priceSource: b.priceSource, defaultPricePerKg: b.defaultPricePerKg } : null,
+      cost: est ? { raw: est.rawMaterialCost, drilling: est.drillingCost, total: est.total, holeCount: est.holeCount } : null,
+      print: printSummary ? {
+        ran: true, profile: printSummary.profile, ok: printSummary.ok, fails: printSummary.fails,
+        stale: Boolean(printSummary.stale), triangles: printSummary.triangles,
+        thresholds: printSummary.thresholds, checks: printSummary.checks
+      } : { ran: false },
+      preflight: pf,
+      setup: pe ? {
+        layerMm: pe.inputs.layerMm, nozzleMm: pe.inputs.nozzleMm, perimeters: pe.inputs.perimeters,
+        infill: pe.inputs.infill, speedMmS: pe.inputs.speedMmS,
+        filamentDiameterMm: fe ? fe.diameterMm : 1.75,
+        estMinutes: pe.minutes, estLowMinutes: pe.lowMinutes, estHighMinutes: pe.highMinutes,
+        layers: pe.layers, heightMm: pe.heightMm,
+        filamentGrams: fe ? fe.grams : null, filamentMetres: fe ? fe.metres : null
+      } : null
+    };
+  }
+
+  function downloadPrintBrief() {
+    var ctx = currentPrintBriefContext();
+    var text = (window.SolidCheckSummary && window.SolidCheckSummary.buildPrintBrief)
+      ? window.SolidCheckSummary.buildPrintBrief(ctx)
+      : 'WebSolid print setup brief\nPart: ' + ctx.name;
+    var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = (part.name || 'part').replace(/[^a-z0-9\-_]+/gi, '-').toLowerCase() + '-print-brief.txt';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    toast('Print setup brief downloaded');
   }
 
   /* -------------------------------------------------------- 2D drawing export */
@@ -4489,6 +4625,97 @@
       holeCount: hs.length,
       breakdown: breakdown
     };
+  }
+
+  /* FDM print-time estimate. Pure arithmetic from numbers the app already
+     has: the finished solid volume and its bounding box. Assumptions are
+     named here and echoed in the panel so the number is never a bare
+     verdict — same advisory-with-inputs posture as the cost estimate. */
+  var PRINT = {
+    layerMm: 0.2,      /* layer height */
+    nozzleMm: 0.4,     /* extrusion width */
+    perimeters: 2,     /* wall shells */
+    infill: 0.2,       /* interior fill fraction */
+    speedMmS: 60,      /* average extrusion speed */
+    overhead: 1.35,    /* travel, acceleration and layer changes */
+    perimeterFactor: 1.3 /* outline factor: corners, holes, cut-outs */
+  };
+
+  /* A slicer turns a solid model into walls plus sparse infill. Wall volume is
+     approximated from the vertical outline (bbox perimeter x height) and the
+     interior gets the infill fraction. minutes = extruded volume / flow rate,
+     scaled by the overhead factor for non-extruding motion. */
+  function computePrintEstimate(metricsIn, partP) {
+    var bbox = (metricsIn && metricsIn.bbox) || [0, 0, 0];
+    var volume = Math.max(0, num(metricsIn && metricsIn.volumeMm3, 0));
+    var height = Math.max(PRINT.layerMm, num(bbox[2], 0));
+    var layers = Math.ceil(height / PRINT.layerMm);
+    var outline = 2 * (num(bbox[0], 0) + num(bbox[1], 0)) * PRINT.perimeterFactor;
+    var wallVol = Math.min(volume, outline * height * PRINT.nozzleMm * PRINT.perimeters);
+    var interior = Math.max(0, volume - wallVol);
+    var extruded = wallVol + interior * PRINT.infill;
+    var flow = PRINT.speedMmS * PRINT.nozzleMm * PRINT.layerMm;
+    var minutes = flow > 0 ? (extruded / flow / 60) * PRINT.overhead : 0;
+    return {
+      minutes: minutes,
+      lowMinutes: minutes * 0.75,
+      highMinutes: minutes * 1.35,
+      layers: layers,
+      heightMm: height,
+      extrudedMm3: extruded,
+      inputs: {
+        layerMm: PRINT.layerMm,
+        nozzleMm: PRINT.nozzleMm,
+        perimeters: PRINT.perimeters,
+        infill: PRINT.infill,
+        speedMmS: PRINT.speedMmS
+      }
+    };
+  }
+
+  /* Slicer-style filament consumption derived from the print estimate's
+     extruded volume. 1.75 mm filament has a cross-section of pi*(0.875)^2
+     = 2.405 mm2, so metres = extruded mm3 / 2405 (mm3 per metre). Grams use
+     the same material density as the solid cost estimate so the two readouts
+     are directly comparable: solid mass = the part, filament mass = what a
+     slicer would actually feed. */
+  var FILAMENT = { diameterMm: 1.75 };
+
+  function computeFilamentEstimate(printEst, densityGcm3) {
+    var areaMm2 = Math.PI * Math.pow(FILAMENT.diameterMm / 2, 2);
+    var extruded = Math.max(0, num(printEst && printEst.extrudedMm3, 0));
+    var density = num(densityGcm3, 0);
+    return {
+      diameterMm: FILAMENT.diameterMm,
+      areaMm2: areaMm2,
+      extrudedMm3: extruded,
+      grams: (extruded / 1000) * density,
+      metres: areaMm2 > 0 ? extruded / areaMm2 / 1000 : 0
+    };
+  }
+
+  /* Testable entry point for the filament estimate: synthetic print metrics
+     and a density, no mesh or DOM needed. */
+  function testFilamentEstimate(metricsIn, densityGcm3) {
+    return computeFilamentEstimate(
+      computePrintEstimate(metricsIn || { bbox: [100, 80, 40], volumeMm3: 100 * 80 * 40 }, null),
+      densityGcm3 === undefined ? 1.24 : densityGcm3
+    );
+  }
+
+  /* "2 h 10 min" / "45 min" formatting for the print-time readout. */
+  function formatPrintTime(minutesIn) {
+    var total = Math.round(Math.max(0, num(minutesIn, 0)));
+    if (total < 60) return total + ' min';
+    var h = Math.floor(total / 60);
+    var m = total % 60;
+    return m === 0 ? h + ' h' : h + ' h ' + m + ' min';
+  }
+
+  /* Testable entry point for the print-time estimate: synthetic metrics, no
+     mesh or DOM needed. */
+  function testPrintEstimate(metricsIn) {
+    return computePrintEstimate(metricsIn || { bbox: [100, 80, 40], volumeMm3: 100 * 80 * 40 }, null);
   }
 
   /* Testable entry point (like pushPullTestReplay): sanitize a raw part,
@@ -5335,15 +5562,19 @@
   var PART_FILE_VERSION = 1;
   var PART_FILE_MAX_BYTES = 2000000;
 
-  function partFilePayload() {
+  function partFilePayloadFor(sourcePart) {
     return {
       format: 'websolid-part',
       version: PART_FILE_VERSION,
       savedAt: new Date().toISOString(),
       app: 'WebSolid parametric part modeler',
       note: 'Editable part definition only: sketch, features, holes, material, equations. No mesh, no account state.',
-      part: sanitizePart(part)
+      part: sanitizePart(sourcePart)
     };
+  }
+
+  function partFilePayload() {
+    return partFilePayloadFor(part);
   }
 
   function notePartFileSave(savedAt) {
@@ -5368,6 +5599,30 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
     notePartFileSave(payload.savedAt);
     toast('Part file saved — editable definition only, no mesh');
+  }
+
+  /* Download the pending browser-local recovery snapshot as a portable part
+     file without restoring it and without deleting it from this browser.
+     This is the non-destructive third choice on the restore banner: the user
+     can keep the part that is open now and still take the snapshot away. */
+  function exportPendingSnapshot() {
+    if (!pendingRestore || !pendingRestore.part) {
+      toast('No browser-local snapshot is waiting to be saved', true);
+      return;
+    }
+    var payload = partFilePayloadFor(pendingRestore.part);
+    var text = JSON.stringify(payload, null, 2);
+    var blob = new Blob([text], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    var base = (pendingRestore.part.name || 'recovered-part');
+    link.download = String(base).replace(/[^a-z0-9\-_]+/gi, '-').toLowerCase() + '-snapshot.websolid.json';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    toast('Snapshot saved as a portable part file — the open part and the browser snapshot are unchanged');
   }
 
   function importPartFile(text) {
@@ -5581,6 +5836,10 @@
     document.getElementById('btn-printability').addEventListener('click', runPrintability);
     var btnCopySummary = document.getElementById('btn-copy-summary');
     if (btnCopySummary) btnCopySummary.addEventListener('click', copyCheckSummary);
+    var btnPrintBrief = document.getElementById('btn-print-brief');
+    if (btnPrintBrief) btnPrintBrief.addEventListener('click', downloadPrintBrief);
+    var btnCopyEstimate = document.getElementById('btn-copy-estimate');
+    if (btnCopyEstimate) btnCopyEstimate.addEventListener('click', copyEstimateSummary);
     var printProfile = document.getElementById('print-profile');
     if (printProfile) {
       if (part.printability && part.printability.profile) printProfile.value = part.printability.profile;
@@ -5622,6 +5881,8 @@
     });
     window.addEventListener('pagehide', flushSessionSnapshot);
     window.addEventListener('beforeunload', flushSessionSnapshot);
+    var btnSaveSnapshot = document.getElementById('btn-save-snapshot');
+    if (btnSaveSnapshot) btnSaveSnapshot.addEventListener('click', exportPendingSnapshot);
     var btnDiscard = document.getElementById('btn-discard-session');
     if (btnDiscard) btnDiscard.addEventListener('click', function () {
       discardSessionSnapshot('Discarded the browser-local snapshot');
@@ -6049,6 +6310,9 @@
     loadPart: loadPartIntoEditor,
     getMesh: function () { return mesh; },
     testPushPullReplay: pushPullTestReplay,
+    testPrintEstimate: testPrintEstimate,
+    testFilamentEstimate: testFilamentEstimate,
+    testCostEstimate: testCostEstimate,
     undo: undo,
     redo: redo,
     undoDepth: function () { return undoStack.length; },
